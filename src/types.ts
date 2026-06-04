@@ -35,4 +35,6 @@ export interface TelegramConfig {
   chatId: string;
   chatTitle?: string;
   isConnected: boolean;
+  enableScannerBroadcast?: boolean;
+  enableManualBroadcast?: boolean;
 }

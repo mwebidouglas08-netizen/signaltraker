@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { TelegramConfig } from "../types";
-import { Send, CheckCircle2, AlertCircle, HelpCircle, Eye, EyeOff, Check, ArrowRight } from "lucide-react";
+import { Send, CheckCircle2, AlertCircle, HelpCircle, Eye, EyeOff, Check, ArrowRight, PowerOff } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface Props {
@@ -14,6 +14,19 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
   const [successInfo, setSuccessInfo] = useState<{ title: string; id: string } | null>(null);
   const [showToken, setShowToken] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+
+  const handleDisconnect = () => {
+    setTestStatus("idle");
+    setErrorMessage("");
+    setSuccessInfo(null);
+    onChange({
+      ...config,
+      botToken: "",
+      chatId: "",
+      isConnected: false,
+      chatTitle: "",
+    });
+  };
 
   const saveConfig = (botToken: string, chatId: string) => {
     onChange({
@@ -190,7 +203,75 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
           />
         </div>
 
-        <div className="pt-2 flex flex-col sm:flex-row gap-3">
+        {/* Toggle options to turn on/off sharing of signals as requested by user */}
+        <div className="bg-slate-950/80 p-4 border border-slate-800/80 rounded-xl space-y-3" id="toggle-broadcast-options">
+          <h4 className="text-xs font-semibold text-sky-400 font-sans tracking-wide uppercase flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
+            <span>Broadcast Sharing Control</span>
+          </h4>
+          
+          <div className="space-y-3">
+            {/* Toggle 1: Scanner Setup Alerts */}
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <div className="space-y-0.5 max-w-[80%]">
+                <span className="font-semibold text-slate-200">1. Volatility Scanner Auto-Broadcast</span>
+                <p className="text-[10px] text-slate-400 leading-normal">
+                  Enable automatic sharing of live setups directly to <code className="text-sky-300 font-mono text-[9px]">{config.chatId || "Channel"}</code>.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onChange({
+                    ...config,
+                    enableScannerBroadcast: config.enableScannerBroadcast === false ? true : false
+                  });
+                }}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-slate-700/30 transition-colors duration-200 ease-in-out focus:outline-none ${
+                  config.enableScannerBroadcast !== false ? 'bg-sky-500' : 'bg-slate-800'
+                }`}
+                id="toggle-scanner-sharing"
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    config.enableScannerBroadcast !== false ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Toggle 2: Manual Composer Signals */}
+            <div className="flex items-center justify-between gap-3 text-xs pt-1 border-t border-slate-900">
+              <div className="space-y-0.5 max-w-[80%]">
+                <span className="font-semibold text-slate-200">2. AI Signal Compiler Auto-Share</span>
+                <p className="text-[10px] text-slate-400 leading-normal">
+                  Enable immediate automatic broadcast of manually generated or compiled drafts without manual click approval.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onChange({
+                    ...config,
+                    enableManualBroadcast: config.enableManualBroadcast === false ? true : false
+                  });
+                }}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-slate-700/30 transition-colors duration-200 ease-in-out focus:outline-none ${
+                  config.enableManualBroadcast !== false ? 'bg-sky-500' : 'bg-slate-800'
+                }`}
+                id="toggle-manual-sharing"
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    config.enableManualBroadcast !== false ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="pt-2 flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
           <button
             type="submit"
             disabled={testStatus === "testing" || !config.botToken || !config.chatId}
@@ -213,8 +294,20 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
             )}
           </button>
 
+          {config.isConnected && (
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/30 font-medium text-xs rounded-xl cursor-pointer transition-all font-sans"
+              id="btn-disconnect-telegram"
+            >
+              <PowerOff className="w-3.5 h-3.5" />
+              <span>Disconnect Channel</span>
+            </button>
+          )}
+
           {config.isConnected && testStatus !== "error" && (
-            <div className="flex items-center gap-1.5 text-emerald-400 text-xs py-2 sm:py-0 px-2 font-medium" id="connected-badge">
+            <div className="flex items-center gap-1.5 text-emerald-400 text-xs py-2 sm:py-0 px-2 font-medium sm:ml-auto" id="connected-badge">
               <CheckCircle2 className="w-4 h-4 shrink-0" />
               <span>Linked: {config.chatTitle || "Channel Verified"}</span>
             </div>

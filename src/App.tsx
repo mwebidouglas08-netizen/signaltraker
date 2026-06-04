@@ -39,6 +39,8 @@ export default function App() {
     chatId: "",
     chatTitle: "",
     isConnected: false,
+    enableScannerBroadcast: true,
+    enableManualBroadcast: true,
   });
 
   const [signals, setSignals] = useState<TradingSignal[]>([]);
@@ -91,7 +93,12 @@ export default function App() {
     const savedConfig = localStorage.getItem(LOCAL_STORAGE_KEY_CONFIG);
     if (savedConfig) {
       try {
-        setConfig(JSON.parse(savedConfig));
+        const parsed = JSON.parse(savedConfig);
+        setConfig({
+          enableScannerBroadcast: true,
+          enableManualBroadcast: true,
+          ...parsed
+        });
       } catch (e) {
         console.error("Failed to parse saved telegram config", e);
       }
@@ -130,12 +137,96 @@ export default function App() {
     sl: string;
     formattedText: string;
     rationale: string;
-  }) => {
+  }, skipAutoBroadcast?: boolean) => {
     setCurrentDraft(data);
     setEditableText(data.formattedText);
     setEditableRationale(data.rationale);
     setBroadcastSuccess(false);
     setBroadcastError("");
+
+    if (config.enableManualBroadcast !== false && !skipAutoBroadcast) {
+      setTimeout(() => {
+        executeAutoBroadcast(data);
+      }, 50);
+    }
+  };
+
+  // Automatic broadcast helper for custom compiler signals
+  const executeAutoBroadcast = async (draftData: {
+    assetClass: string;
+    symbol: string;
+    action: string;
+    entry: string;
+    tp1: string;
+    tp2: string;
+    tp3: string;
+    sl: string;
+    formattedText: string;
+    rationale: string;
+  }) => {
+    if (!config.botToken || !config.chatId) {
+      setBroadcastError("Please configure your Telegram Bot Token and Channel ID before auto-broadcasting.");
+      return;
+    }
+
+    setIsBroadcasting(true);
+    setBroadcastError("");
+    setBroadcastSuccess(false);
+
+    try {
+      const response = await fetch("/api/telegram/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          botToken: config.botToken,
+          chatId: config.chatId,
+          text: draftData.formattedText,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to broadcast signal.");
+      }
+
+      // Record successful dispatch
+      const newSignal: TradingSignal = {
+        id: "sig_" + Date.now(),
+        assetClass: draftData.assetClass || "Other",
+        symbol: draftData.symbol || "CUSTOM",
+        action: draftData.action || "BUY",
+        entry: draftData.entry || "CMP",
+        tp1: draftData.tp1 || "",
+        tp2: draftData.tp2 || "",
+        tp3: draftData.tp3 || "",
+        sl: draftData.sl || "",
+        userNotes: "Auto-Shared instantly after formulation",
+        formattedText: draftData.formattedText,
+        rationale: draftData.rationale,
+        status: "ACTIVE",
+        sentMessageId: data.messageId ? String(data.messageId) : null,
+        botTokenUsed: config.botToken,
+        chatIdUsed: config.chatId,
+        chatTitle: data.chatTitle || config.chatTitle || "Telegram Channel",
+        createdAt: new Date().toISOString(),
+        updateHistory: [],
+      };
+
+      setSignals((prev) => {
+        const updated = [newSignal, ...prev];
+        localStorage.setItem(LOCAL_STORAGE_KEY_SIGNALS, JSON.stringify(updated));
+        return updated;
+      });
+      setBroadcastSuccess(true);
+      setLastBroadcastId(newSignal.id);
+      setSelectedSignal(newSignal);
+      setCurrentDraft(null); // Clear raw draft as it's sent & stored in signals history list!
+    } catch (err: any) {
+      setBroadcastError(err.message || "An issue occurred connecting to Telegram.");
+    } finally {
+      setIsBroadcasting(false);
+    }
   };
 
   // Broadcast Draft over Express API API to Telegram
@@ -213,6 +304,10 @@ export default function App() {
 
   // Direct post helper for auto scanner bot broadcasts
   const handlePostDirectTelegram = async (text: string) => {
+    if (config.enableScannerBroadcast === false) {
+      return { success: false, error: "Auto-Broadcasting from the scanner is turned OFF." };
+    }
+
     if (!config.botToken || !config.chatId) {
       return { success: false, error: "Please configure your Telegram credentials first!" };
     }
@@ -492,6 +587,73 @@ export default function App() {
         </div>
       </header>
 
+      {/* Dynamic Status bar showing active broadcast settings with toggles as requested by user */}
+      <div className="bg-slate-900/60 border-b border-slate-900/80 py-3 px-6 font-sans backdrop-blur-sm shadow-inner" id="global-broadcast-sharing-status-bar">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-xs">
+          <div className="flex flex-wrap items-center gap-2 text-slate-400">
+            <span className="flex items-center gap-1.5 text-sky-400">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
+              </span>
+              <span>Primary Telegram Feed:</span>
+            </span>
+            <code className="bg-slate-950 px-2.5 py-1 rounded text-sky-300 border border-slate-850 font-mono font-medium text-[11px]">
+              {config.chatId || "-1002590400274"}
+            </code>
+            {config.isConnected && (
+              <span className="bg-emerald-950/40 text-emerald-400 border border-emerald-950/80 px-2 py-0.5 rounded text-[10px]">
+                Linked 🔗
+              </span>
+            )}
+          </div>
+          
+          <div className="flex flex-col sm:flex-row flex-wrap items-center gap-3 sm:gap-6">
+            {/* Toggle Option 1: Scanner Setup Alerts */}
+            <div className="flex items-center gap-2.5">
+              <span className="text-slate-300 font-medium">1. Volatility Scanner Live:</span>
+              <button
+                type="button"
+                onClick={() => persistConfig({
+                  ...config,
+                  enableScannerBroadcast: config.enableScannerBroadcast === false ? true : false
+                })}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold border cursor-pointer transition-all duration-150 transform active:scale-95 flex items-center gap-1.5 ${
+                  config.enableScannerBroadcast !== false
+                    ? "bg-emerald-950 border-emerald-800 text-emerald-300 shadow-md shadow-emerald-950/20"
+                    : "bg-slate-900 border-slate-800 text-slate-500 hover:bg-slate-850 hover:text-slate-400"
+                }`}
+                id="header-toggle-scanner-share"
+              >
+                <div className={`w-1.5 h-1.5 rounded-full ${config.enableScannerBroadcast !== false ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`}></div>
+                <span>{config.enableScannerBroadcast !== false ? "🟢 SHARING LIVE" : "🔴 OFF (DRAFTS)"}</span>
+              </button>
+            </div>
+
+            {/* Toggle Option 2: Manual AI Form Alerts */}
+            <div className="flex items-center gap-2.5 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-850 w-full sm:w-auto justify-between">
+              <span className="text-slate-300 font-medium">2. AI Manual Composer:</span>
+              <button
+                type="button"
+                onClick={() => persistConfig({
+                  ...config,
+                  enableManualBroadcast: config.enableManualBroadcast === false ? true : false
+                })}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold border cursor-pointer transition-all duration-150 transform active:scale-95 flex items-center gap-1.5 ${
+                  config.enableManualBroadcast !== false
+                    ? "bg-emerald-950 border-emerald-800 text-emerald-300 shadow-md shadow-emerald-950/20"
+                    : "bg-slate-900 border-slate-800 text-slate-500 hover:bg-slate-850 hover:text-slate-400"
+                }`}
+                id="header-toggle-manual-share"
+              >
+                <div className={`w-1.5 h-1.5 rounded-full ${config.enableManualBroadcast !== false ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`}></div>
+                <span>{config.enableManualBroadcast !== false ? "🟢 AUTO-SHARE" : "🔴 OFF (REVIEW)"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Main Container Content */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6" id="dashboard-main-content">
         
@@ -530,6 +692,9 @@ export default function App() {
                 <TradingSignalForm 
                   onSignalGenerated={handleSignalGenerated} 
                   aiConfigured={aiConfigured} 
+                  autoShareEnabled={config.enableManualBroadcast !== false}
+                  onAutoShareToggle={(val) => persistConfig({ ...config, enableManualBroadcast: val })}
+                  telegramConfigChatId={config.chatId}
                 />
 
                 {/* Technical terminology rationale section if generated */}

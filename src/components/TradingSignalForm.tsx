@@ -15,9 +15,18 @@ interface Props {
     rationale: string;
   }) => void;
   aiConfigured: boolean;
+  autoShareEnabled: boolean;
+  onAutoShareToggle: (value: boolean) => void;
+  telegramConfigChatId?: string;
 }
 
-export default function TradingSignalForm({ onSignalGenerated, aiConfigured }: Props) {
+export default function TradingSignalForm({ 
+  onSignalGenerated, 
+  aiConfigured,
+  autoShareEnabled,
+  onAutoShareToggle,
+  telegramConfigChatId
+}: Props) {
   // Toggle tab: "classic" vs "deriv"
   const [formMode, setFormMode] = useState<"classic" | "deriv">("deriv");
 
@@ -705,6 +714,50 @@ export default function TradingSignalForm({ onSignalGenerated, aiConfigured }: P
             <span>{genError}</span>
           </div>
         )}
+
+        {/* Telegram Auto-Share Dispatcher Options */}
+        <div className="bg-slate-950 p-4 border border-slate-850/60 rounded-xl space-y-2.5" id="auto-broadcast-manual-config">
+          <div className="flex justify-between items-center text-xs">
+            <span className="text-slate-300 font-medium font-sans">Telegram Share Dispatch Mode</span>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border font-mono ${
+              autoShareEnabled 
+                ? "bg-emerald-950/40 text-emerald-300 border-emerald-900/40" 
+                : "bg-slate-900 text-slate-500 border-slate-800"
+            }`}>
+              {autoShareEnabled ? "INSTANT DISPATCH ON BUILD" : "MANUAL REVIEW POSTS"}
+            </span>
+          </div>
+          <p className="text-[10px] text-slate-500 leading-snug">
+            Send formulated trading setups automatically to channel <code>{telegramConfigChatId || "Telegram"}</code> as soon as you compile or AI-drafts them.
+          </p>
+          
+          <div className="grid grid-cols-2 gap-2 pt-0.5 font-sans">
+            <button
+              type="button"
+              onClick={() => onAutoShareToggle(false)}
+              className={`py-1.5 px-3 text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                !autoShareEnabled
+                  ? "bg-slate-800 text-white border border-slate-700/60"
+                  : "bg-slate-900/50 text-slate-450 border border-slate-850/60 hover:bg-slate-800/30"
+              }`}
+              id="btn-manual-review-only"
+            >
+              Draft & Manual Review
+            </button>
+            <button
+              type="button"
+              onClick={() => onAutoShareToggle(true)}
+              className={`py-1.5 px-3 text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                autoShareEnabled
+                  ? "bg-emerald-950/60 text-emerald-300 border border-emerald-900/40"
+                  : "bg-slate-900/50 text-slate-455 border border-slate-850/60 hover:bg-slate-800/30"
+              }`}
+              id="btn-auto-share-instantly"
+            >
+              Auto-Share Instantly ⚡
+            </button>
+          </div>
+        </div>
 
         {/* Action controllers */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-3 border-t border-slate-800/60 font-sans">
