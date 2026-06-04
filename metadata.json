@@ -1,0 +1,6 @@
+{
+  "name": "Telegram Signal Broadcaster",
+  "description": "An interactive, AI-powered control center to compose, preview, polish, and broadcast trading signals directly to Telegram channels.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

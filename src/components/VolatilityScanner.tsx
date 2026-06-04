@@ -1,0 +1,1482 @@
+import React, { useState, useEffect, useRef } from "react";
+import { 
+  Activity, 
+  Play, 
+  Square, 
+  Cpu, 
+  Zap, 
+  Radio, 
+  Send, 
+  Sparkles, 
+  Server, 
+  BellRing, 
+  BadgeAlert, 
+  RefreshCw,
+  Gauge,
+  TrendingUp,
+  CircleDot,
+  Clock,
+  CheckCircle,
+  AlertTriangle,
+  Flame,
+  Hourglass
+} from "lucide-react";
+
+interface Props {
+  onSignalGenerated: (signalData: {
+    assetClass: string;
+    symbol: string;
+    action: string;
+    entry: string;
+    tp1: string;
+    tp2: string;
+    tp3: string;
+    sl: string;
+    formattedText: string;
+    rationale: string;
+  }) => void;
+  telegramConfig: {
+    botToken: string;
+    chatId: string;
+    chatTitle?: string;
+    isConnected: boolean;
+  };
+  aiConfigured: boolean;
+  onPostDirectTelegram: (text: string) => Promise<{ success: boolean; messageId?: string; error?: string }>;
+}
+
+interface MarketIndex {
+  id: string;
+  name: string;
+  price: number;
+  lastDigits: number[];
+  strength: number;
+  patternFound: string;
+  action: string;
+  strategy: string;
+  ticks: string;
+  confidence: string;
+  entryDigit: string;
+}
+
+const INITIAL_MARKETS: MarketIndex[] = [
+  {
+    id: "v100_1s",
+    name: "Volatility 100 (1s) Index",
+    price: 843265.50,
+    lastDigits: [5, 2, 9, 8, 3, 1, 7, 0, 4, 9],
+    strength: 84,
+    patternFound: "Second Least Digit anomaly",
+    action: "UNDER 7",
+    strategy: "Second Least Digit",
+    ticks: "1ticks",
+    confidence: "84%",
+    entryDigit: "9"
+  },
+  {
+    id: "v10_1s",
+    name: "Volatility 10 (1s) Index",
+    price: 4325.20,
+    lastDigits: [2, 8, 7, 4, 1, 9, 3, 5, 2, 8],
+    strength: 64,
+    patternFound: "Digit 8 cluster peaks",
+    action: "OVER 5",
+    strategy: "Tick Oscillator Breakout",
+    ticks: "5ticks",
+    confidence: "78%",
+    entryDigit: "8"
+  },
+  {
+    id: "v25_1s",
+    name: "Volatility 25 (1s) Index",
+    price: 19852.10,
+    lastDigits: [0, 5, 6, 9, 2, 3, 8, 7, 4, 1],
+    strength: 71,
+    patternFound: "Odd digit clustering",
+    action: "UNDER 7",
+    strategy: "Parabolic Tick Cycle",
+    ticks: "1ticks",
+    confidence: "82%",
+    entryDigit: "1"
+  },
+  {
+    id: "v50_1s",
+    name: "Volatility 50 (1s) Index",
+    price: 298520.40,
+    lastDigits: [9, 3, 2, 7, 5, 4, 2, 8, 9, 0],
+    strength: 58,
+    patternFound: "Range consolidation",
+    action: "UNDER 7",
+    strategy: "Second Least Digit",
+    ticks: "1ticks",
+    confidence: "75%",
+    entryDigit: "0"
+  },
+  {
+    id: "v75_1s",
+    name: "Volatility 75 (1s) Index",
+    price: 542710.80,
+    lastDigits: [4, 7, 2, 9, 1, 8, 0, 5, 3, 9],
+    strength: 88,
+    patternFound: "Extreme Digit 9 Divergence (High-Strength)",
+    action: "UNDER 7",
+    strategy: "Second Least Digit",
+    ticks: "1ticks",
+    confidence: "88%",
+    entryDigit: "9"
+  },
+  {
+    id: "v10",
+    name: "Volatility 10 Index",
+    price: 9452.75,
+    lastDigits: [7, 5, 1, 9, 2, 8, 4, 6, 3, 7],
+    strength: 62,
+    patternFound: "Harmonic oscillator wave",
+    action: "OVER 5",
+    strategy: "Tick Duration Support",
+    ticks: "5ticks",
+    confidence: "70%",
+    entryDigit: "7"
+  },
+  {
+    id: "v100",
+    name: "Volatility 100 Index",
+    price: 334510.15,
+    lastDigits: [3, 9, 0, 5, 2, 7, 4, 1, 8, 2],
+    strength: 86,
+    patternFound: "Digit 2 support levels",
+    action: "UNDER 7",
+    strategy: "Second Least Digit",
+    ticks: "1ticks",
+    confidence: "86%",
+    entryDigit: "2"
+  },
+  {
+    id: "v25",
+    name: "Volatility 25 Index",
+    price: 6104.90,
+    lastDigits: [5, 2, 8, 1, 9, 3, 7, 0, 4, 3],
+    strength: 52,
+    patternFound: "Symmetric tick balancing",
+    action: "UNDER 7",
+    strategy: "Digit Spread Mean",
+    ticks: "10ticks",
+    confidence: "68%",
+    entryDigit: "3"
+  },
+  {
+    id: "v50",
+    name: "Volatility 50 Index",
+    price: 184520.60,
+    lastDigits: [8, 4, 0, 9, 2, 7, 3, 1, 6, 5],
+    strength: 78,
+    patternFound: "RSI Digit Extreme oversold",
+    action: "OVER 4",
+    strategy: "Volatility Peak Oscillator",
+    ticks: "5ticks",
+    confidence: "81%",
+    entryDigit: "5"
+  },
+  {
+    id: "v75",
+    name: "Volatility 75 Index",
+    price: 74219.45,
+    lastDigits: [1, 5, 9, 2, 8, 0, 4, 7, 3, 9],
+    strength: 87,
+    patternFound: "Tick Series 9 Anomalies Identified",
+    action: "UNDER 7",
+    strategy: "Second Least Digit",
+    ticks: "1ticks",
+    confidence: "87%",
+    entryDigit: "9"
+  }
+];
+
+export default function VolatilityScanner({ 
+  onSignalGenerated, 
+  telegramConfig, 
+  aiConfigured,
+  onPostDirectTelegram
+}: Props) {
+  // Scanner Engine States
+  const [isRunning, setIsRunning] = useState(true);
+  const [markets, setMarkets] = useState<MarketIndex[]>(INITIAL_MARKETS);
+  const [scanSpeed, setScanSpeed] = useState<number>(4000); 
+  const [autoBroadcast, setAutoBroadcast] = useState(true); // default to auto broadcast inside bots
+  const [isAiComposition, setIsAiComposition] = useState(true);
+  
+  // Custom configurable targets requested by user
+  const [minStrengthThreshold, setMinStrengthThreshold] = useState<number>(85); // "85 and above percent"
+  const [activeSignalDuration, setActiveSignalDuration] = useState<number>(300); // default strictly 5 minutes (300 seconds)
+  const [cooldownDuration, setCooldownDuration] = useState<number>(30); // minutes/seconds cooldown time (seconds)
+
+  // Hourly Broadcast and Contract Barriers configuration states
+  const [broadcastFrequency, setBroadcastFrequency] = useState<"hourly" | "dynamic">("hourly");
+  const [hourlyIntervalMinutes, setHourlyIntervalMinutes] = useState<number>(2); // Default strictly 2 minutes
+  const [hourlyTimerLeft, setHourlyTimerLeft] = useState<number>(120); // Default countdown starts at 120s (2 minutes)
+  const [activeContracts, setActiveContracts] = useState<string[]>([
+    "OVER 1",
+    "OVER 2",
+    "OVER 3",
+    "OVER 4",
+    "UNDER 6",
+    "UNDER 7",
+    "UNDER 8",
+    "UNDER 9"
+  ]);
+
+  // System State Machine
+  // "SCANNING" -> Triggered! -> "ACTIVE_SIGNAL" -> Expires -> "COOLDOWN" -> Finishes -> "SCANNING"
+  const [scannerState, setScannerState] = useState<"SCANNING" | "ACTIVE_SIGNAL" | "COOLDOWN">("SCANNING");
+  const [timerLeft, setTimerLeft] = useState<number>(0);
+  const [activeContract, setActiveContract] = useState<{
+    symbol: string;
+    action: string;
+    strength: number;
+    strategy: string;
+    entryDigit: string;
+    formattedText: string;
+    ticks: string;
+    startedAt: number;
+  } | null>(null);
+
+  // Stats records
+  const [scannedCount, setScannedCount] = useState(0);
+  const [strongestMarket, setStrongestMarket] = useState<MarketIndex | null>(INITIAL_MARKETS[4]); 
+  const [autoLog, setAutoLog] = useState<string[]>([
+    "✅ Bot initialized: Multi-Asset Scanner active.",
+    "🔍 Scanning criteria loaded: Min target Strength >= 85%.",
+    "⚙️ Auto-broadcast is enabled. Outgoing signals will post live to Telegram and trace expiry sequences."
+  ]);
+  const [generatingSignal, setGeneratingSignal] = useState(false);
+
+  // Keep references to prevent async closure state mismatches
+  const isRunningRef = useRef(isRunning);
+  useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
+
+  const scanSpeedRef = useRef(scanSpeed);
+  useEffect(() => { scanSpeedRef.current = scanSpeed; }, [scanSpeed]);
+
+  const autoBroadcastRef = useRef(autoBroadcast);
+  useEffect(() => { autoBroadcastRef.current = autoBroadcast; }, [autoBroadcast]);
+  
+  const isAiCompositionRef = useRef(isAiComposition);
+  useEffect(() => { isAiCompositionRef.current = isAiComposition; }, [isAiComposition]);
+
+  const configRef = useRef(telegramConfig);
+  useEffect(() => { configRef.current = telegramConfig; }, [telegramConfig]);
+
+  const scannerStateRef = useRef(scannerState);
+  useEffect(() => { scannerStateRef.current = scannerState; }, [scannerState]);
+
+  const activeContractRef = useRef(activeContract);
+  useEffect(() => { activeContractRef.current = activeContract; }, [activeContract]);
+
+  const minStrengthThresholdRef = useRef(minStrengthThreshold);
+  useEffect(() => { minStrengthThresholdRef.current = minStrengthThreshold; }, [minStrengthThreshold]);
+
+  const broadcastFrequencyRef = useRef(broadcastFrequency);
+  useEffect(() => { broadcastFrequencyRef.current = broadcastFrequency; }, [broadcastFrequency]);
+
+  const hourlyTimerLeftRef = useRef(hourlyTimerLeft);
+  useEffect(() => { hourlyTimerLeftRef.current = hourlyTimerLeft; }, [hourlyTimerLeft]);
+
+  const activeContractsRef = useRef(activeContracts);
+  useEffect(() => { activeContractsRef.current = activeContracts; }, [activeContracts]);
+
+  const hourlyIntervalMinutesRef = useRef(hourlyIntervalMinutes);
+  useEffect(() => { hourlyIntervalMinutesRef.current = hourlyIntervalMinutes; }, [hourlyIntervalMinutes]);
+
+  // Audio tone helper
+  const playBeep = (freq = 800, dur = 0.05) => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.01, ctx.currentTime); 
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + dur);
+    } catch (e) {
+      // Ignored
+    }
+  };
+
+  // Pre-Signal warning dispatch helper
+  const triggerPreSignalWarning = async () => {
+    const warningMsg = `📡 [Pre-Signal Alert] Sending upcoming trade warning alert to the Telegram channel...`;
+    setAutoLog((prev) => [warningMsg, ...prev.slice(0, 49)]);
+
+    let alertText = `🚨 <b>ALERT TO ALL DBOT.SITE MEMBERS  🚨</b>\n\n`;
+    alertText += `⚠ In just a few minutes, a new signal will be sent!\n`;
+    alertText += `📢 <b>Be ready and standby!</b>\n\n`;
+    alertText += `🖥 <b>Go to:</b> https://www.mrzetuzetu.site/\n`;
+    alertText += `🤖 <b>Load your bot:</b> <code>dbot sv 1</code>\n\n`;
+    alertText += `✅ Make sure your settings are ready…\n`;
+    alertText += `🚀 Let’s catch this trade together!\n\n`;
+    alertText += `#StayAlert #mrzetuzetusignal 🔥📈 🔥 We either go home or go hard 💸\n`;
+    alertText += `No risk no Ferrari 🚀\n`;
+    alertText += `https://www.mrzetuzetu.site`;
+
+    if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
+      if (!configRef.current.botToken || !configRef.current.chatId) {
+        setAutoLog((prev) => [`⚠️ Pre-Signal warning aborted: Bot Token or Chat ID not configured.`, ...prev.slice(0, 49)]);
+        return;
+      }
+      try {
+        const res = await onPostDirectTelegram(alertText);
+        if (res.success) {
+          setAutoLog((prev) => [`🚀 Pre-signal warning successfully broadcasted to channel!`, ...prev.slice(0, 49)]);
+        } else {
+          setAutoLog((prev) => [`❌ Pre-signal warning failed: ${res.error}`, ...prev.slice(0, 49)]);
+        }
+      } catch (err: any) {
+        setAutoLog((prev) => [`❌ Error dispatching warning alert: ${err.message}`, ...prev.slice(0, 49)]);
+      }
+    }
+  };
+
+  // Monitor count down seconds for Pre-Signal warning alert dispatch
+  useEffect(() => {
+    if (scannerState !== "SCANNING" || broadcastFrequency !== "hourly" || !isRunning) return;
+    
+    // Configured warning threshold: 30s before dispatch.
+    // If interval is extremely short, use half the interval as safety fallback.
+    const intervalSeconds = hourlyIntervalMinutes * 60;
+    const warningThreshold = intervalSeconds > 40 ? 30 : Math.floor(intervalSeconds / 2);
+    
+    if (hourlyTimerLeft === warningThreshold) {
+      triggerPreSignalWarning();
+    }
+  }, [hourlyTimerLeft, scannerState, broadcastFrequency, isRunning, hourlyIntervalMinutes]);
+
+  // 1-Second Dedicated Timer Loop for state transitions and countdown counts
+  useEffect(() => {
+    const handler = setInterval(() => {
+      if (!isRunningRef.current) return;
+
+      if (scannerStateRef.current === "ACTIVE_SIGNAL" || scannerStateRef.current === "COOLDOWN") {
+        setTimerLeft((prev) => {
+          if (prev <= 1) {
+            // Timer finished, transition state
+            setTimeout(() => handleTimeFinished(), 0);
+            return 0;
+          }
+          return prev - 1;
+        });
+      } else if (scannerStateRef.current === "SCANNING") {
+        // If in Hourly Scheduler mode, count down toward the next hourly signal broadcast
+        if (broadcastFrequencyRef.current === "hourly") {
+          setHourlyTimerLeft((prev) => {
+            if (prev <= 1) {
+              // Time's up! Trigger signal dispatch
+              setTimeout(() => {
+                // Select strongest market dynamically
+                setMarkets((currentMarkets) => {
+                  const sorted = [...currentMarkets].sort((a, b) => b.strength - a.strength);
+                  const topMarket = sorted[0] || INITIAL_MARKETS[4];
+                  
+                  setAutoLog((prevLogs) => [
+                    `⏰ [HOURLY DISPATCH CYCLE] 1 Hour countdown completed! Auto-broadcasting top setup to Telegram...`,
+                    `🏆 Dynamic asset: ${topMarket.name}`,
+                    ...prevLogs.slice(0, 48)
+                  ]);
+                  
+                  handleTriggerDetection(topMarket);
+                  return currentMarkets;
+                });
+              }, 0);
+              
+              // Reset countdown
+              return hourlyIntervalMinutesRef.current * 60;
+            }
+            return prev - 1;
+          });
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(handler);
+  }, []);
+
+  // Handle timer completion (Active Signal finished -> Cooldown, Cooldown finished -> SCANNING)
+  const handleTimeFinished = async () => {
+    if (scannerStateRef.current === "ACTIVE_SIGNAL") {
+      const current = activeContractRef.current;
+      if (!current) {
+        setScannerState("SCANNING");
+        return;
+      }
+
+      // transition to COOLDOWN state
+      setScannerState("COOLDOWN");
+      setTimerLeft(cooldownDuration);
+      
+      const logExpiry = `⏰ [Signal Expiry] Signal on ${current.symbol} has EXPIRED! Dispatching Telegram notification and entering a ${cooldownDuration}s Cooldown period...`;
+      setAutoLog((prev) => [logExpiry, ...prev.slice(0, 49)]);
+      playBeep(400, 0.4);
+
+      // Generate next signal schedule target dynamically in local timezone (12-hour format with AM/PM)
+      const now = new Date();
+      const secondsToNext = cooldownDuration + (hourlyIntervalMinutesRef.current * 60);
+      const nextDate = new Date(now.getTime() + secondsToNext * 1000);
+      
+      let hours = nextDate.getHours();
+      const minutes = nextDate.getMinutes();
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12;
+      hours = hours ? hours : 12; // conversion for hour '0' to '12'
+      const minutesStr = String(minutes).padStart(2, "0");
+      const nextTimeFormatted = `${hours}:${minutesStr} ${ampm}`;
+
+      let expiryText = `⏰ <b>𝐍𝐄𝐗𝐓 𝐒𝐈𝐆𝐍𝐀𝐋 𝐀𝐋𝐄𝐑𝐓!</b> ⏰\n\n`;
+      expiryText += `Always remember poverty is the biggest enemy....🔥🫸🔥\n`;
+      expiryText += `🔥 <b>dbot sv 1 bot</b> , we catch <b>${nextTimeFormatted}</b> for another powerful signal!\n`;
+      expiryText += `(Over/under)\n\n`;
+      expiryText += `💻 Make sure you're on https://www.mrzetuzetu.site\n`;
+      expiryText += `🤖 Bot ready ➕ Focused ➕ Active\n`;
+      expiryText += `💰 Let's trade and make that money together! 🤑📈\n\n`;
+      expiryText += `#zetuzetu.site Moves #maziwa Time 💸`;
+
+      if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
+        try {
+          const res = await onPostDirectTelegram(expiryText);
+          if (res.success) {
+            setAutoLog((prev) => [`🚀 Expiration alert successfully shared with the channel!`, ...prev.slice(0, 49)]);
+          } else {
+            setAutoLog((prev) => [`❌ Failed to send Expiry alert on Telegram: ${res.error}`, ...prev.slice(0, 49)]);
+          }
+        } catch (err: any) {
+          setAutoLog((prev) => [`❌ Error dispatching expiry message: ${err.message}`, ...prev.slice(0, 49)]);
+        }
+      }
+
+    } else if (scannerStateRef.current === "COOLDOWN") {
+      // Cooldown finished, transition back to SCANNING
+      setScannerState("SCANNING");
+      setActiveContract(null);
+      setTimerLeft(0);
+
+      const logReady = `🟢 [Scanner Resumed] Cooldown complete! Resuming real-time monitoring across all 10 indices for setups >= ${minStrengthThresholdRef.current}%.`;
+      setAutoLog((prev) => [logReady, ...prev.slice(0, 49)]);
+      playBeep(1000, 0.35);
+
+      // Inform users that cooldown is over and bot is ready to send another signal
+      let readyText = `<b>🟢 BOT MONITOR READY FOR NEXT SIGNAL 🟢</b>\n\n`;
+      readyText += `Our Multi-Market Scanner has finished its cooldown cycle.\n`;
+      readyText += `⭐ <b>Minimum Strength Target:</b> <code>>= ${minStrengthThresholdRef.current}%</code>\n`;
+      readyText += `📊 Volatility indices are active. Get ready for the next high-probability digit pattern!`;
+
+      if (autoBroadcastRef.current) {
+        try {
+          await onPostDirectTelegram(readyText);
+          setAutoLog((prev) => [`🚀 Live alert dispatched: Cooldown finished. Ready for next setups.`, ...prev.slice(0, 49)]);
+        } catch (err) {}
+      }
+    }
+  };
+
+  // Main background tick simulation
+  useEffect(() => {
+    let timerId: any = null;
+
+    const runSimulationLoop = () => {
+      if (!isRunningRef.current) {
+        timerId = setTimeout(runSimulationLoop, 1000);
+        return;
+      }
+
+      // Simulate tick action across all markets
+      setMarkets((prev) => {
+        const next = prev.map((m) => {
+          // randomized micro price fluctuations
+          const coef = (Math.random() - 0.495) * 0.0008;
+          const newPrice = Number((m.price * (1 + coef)).toFixed(2));
+          
+          // push a new randomized last digit
+          const newDigit = Math.floor(Math.random() * 10);
+          const nextDigits = [...m.lastDigits.slice(1), newDigit];
+
+          // dynamic strength changes
+          let randomShift = Math.floor(Math.random() * 9) - 4;
+          let newStrength = m.strength + randomShift;
+          if (newStrength < 45) m.strength = 48;
+          if (newStrength > 99) newStrength = 99;
+
+          // determine target trading biases dynamically from activeContracts list
+          const currentActive = activeContractsRef.current.length > 0 
+            ? activeContractsRef.current 
+            : ["UNDER 7"];
+            
+          // Consistently align strategy index per asset
+          const strategyIndex = Math.abs(m.id.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0)) % currentActive.length;
+          const chosenContract = currentActive[strategyIndex] || "UNDER 7";
+
+          let action = chosenContract;
+          let entryDigit = "9";
+          let pattern = m.patternFound;
+          let strategy = "Second Least Digit";
+
+          // Logic-based trigger/entry digits and patterns for Deriv Over/Under Contracts:
+          if (chosenContract === "UNDER 9") {
+            entryDigit = "9";
+            pattern = "Last digit 9 extreme peak frequency deviation";
+            strategy = "Under Digit Drift Mean Reversion";
+          } else if (chosenContract === "UNDER 8") {
+            entryDigit = "9";
+            pattern = "Digit 9 trend clustering (mean reversion)";
+            strategy = "Under Digit Drift Mean Reversion";
+          } else if (chosenContract === "UNDER 7") {
+            entryDigit = "9";
+            pattern = "Second Least Digit anomaly detected";
+            strategy = "Second Least Digit";
+          } else if (chosenContract === "UNDER 6") {
+            entryDigit = "8";
+            pattern = "Peak tick oscillation above 6 boundary";
+            strategy = "Under Digit Drift Mean Reversion";
+          } else if (chosenContract === "OVER 1") {
+            entryDigit = "0";
+            pattern = "Symmetric tick divergence at bottom zone 0";
+            strategy = "Over Digit Threshold Oscillator";
+          } else if (chosenContract === "OVER 2") {
+            entryDigit = "1";
+            pattern = "Harmonic support trend cluster on digit 1";
+            strategy = "Over Digit Threshold Oscillator";
+          } else if (chosenContract === "OVER 3") {
+            entryDigit = "2";
+            pattern = "Tick wave cycle oversold trigger on digit 2";
+            strategy = "Over Digit Threshold Oscillator";
+          } else if (chosenContract === "OVER 4") {
+            entryDigit = "3";
+            pattern = "Tick oscillator oversold at boundary 3";
+            strategy = "Over Digit Threshold Oscillator";
+          }
+
+          return {
+            ...m,
+            price: newPrice,
+            lastDigits: nextDigits,
+            strength: newStrength > 99 ? 99 : newStrength < 45 ? 45 : newStrength,
+            action,
+            entryDigit,
+            strategy,
+            patternFound: pattern
+          };
+        });
+
+        // Pick the absolute strongest index
+        const strongest = [...next].sort((a, b) => b.strength - a.strength)[0];
+        setStrongestMarket(strongest);
+
+        return next;
+      });
+
+      // Increment stats
+      setScannedCount((c) => c + 1);
+
+      // Trigger standard quiet flash sounds
+      if (scannerStateRef.current === "SCANNING") {
+        playBeep(950, 0.02);
+      }
+
+      // Schedule next run
+      timerId = setTimeout(runSimulationLoop, scanSpeedRef.current);
+    };
+
+    runSimulationLoop();
+
+    return () => {
+      if (timerId) clearTimeout(timerId);
+    };
+  }, []);
+
+  // Monitor strongest market fluctuations in real-time, trigger when >= minStrengthThreshold (default 85)
+  useEffect(() => {
+    if (!isRunning || !strongestMarket) return;
+    
+    // If in Hourly Scheduler mode, we DO NOT auto-trigger on simple threshold spikes
+    if (broadcastFrequency !== "dynamic") return;
+    
+    // Check if the scanner is currently idle (SCANNING state) and we hit the threshold
+    if (scannerState === "SCANNING" && strongestMarket.strength >= minStrengthThreshold) {
+      
+      const logMsg = `🔥 [Pattern Spike] ${strongestMarket.name} reached ${strongestMarket.strength}% (threshold requirement >= ${minStrengthThreshold}%). Triggering broadcast dispatch...`;
+      setAutoLog((prev) => [logMsg, ...prev.slice(0, 49)]);
+
+      // Auto trigger the generator!
+      handleTriggerDetection(strongestMarket);
+    }
+  }, [strongestMarket, isRunning, scannerState, minStrengthThreshold, broadcastFrequency]);
+
+  const compileTemplateSignal = (m: MarketIndex) => {
+    let html = `<b>🔔 NEW TRADING SIGNAL 🔔</b>\n\n`;
+    html += `<b>${m.name.toUpperCase()}</b>\n\n`;
+    html += `📈 <b>${m.action.toUpperCase()}</b>\n`;
+    html += `⚡ <b>Strategy:</b> ${m.strategy}\n\n`;
+    html += `📊 <b>Market Analysis (${m.ticks})</b>\n`;
+    html += `━━━━━━━━━\n`;
+    html += `🎯 <b>Entry Instructions:</b>\n\n`;
+    html += `<b>USE SNIPPER KILLER BOT</b>\n`;
+    html += `💹 <b>Trade:</b> ${m.action}\n`;
+    html += `🔑 <b>Entry Digit:</b> <code>${m.entryDigit}</code>\n`;
+    html += `⭐ <b>Confidence:</b> ${m.strength}%\n\n`;
+    html += `https://mrzetuzetu.site\n\n`;
+    html += `📈 <b>Session Stats:</b>\n\n`;
+    html += `⚠️ <b>Risk Management:</b>\n`;
+    html += `• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs\n\n`;
+    
+    const now = new Date();
+    const timeStr = `${now.getMonth() + 1}/${now.getDate()}/${String(now.getFullYear()).substring(2)}, ${now.toLocaleTimeString("en-US")} UTC`;
+    html += `⏰ <b>Time:</b> ${timeStr}\n\n`;
+    html += `🤖 Generated by mrzetuzetu Over/Under Bot\n`;
+    html += `#TradingSignal #Deriv #OverUnder`;
+
+    return html;
+  };
+
+  const handleTriggerDetection = async (targetMarket: MarketIndex) => {
+    setGeneratingSignal(true);
+    
+    const logMsg = `⚙️ Formulating high-accuracy message parameters for ${targetMarket.name}...`;
+    setAutoLog((prev) => [logMsg, ...prev.slice(0, 49)]);
+
+    try {
+      let finalHtml = "";
+      let finalRationale = "";
+
+      if (isAiCompositionRef.current && aiConfigured) {
+        const response = await fetch("/api/gemini/generate-signal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            assetClass: "Deriv Synthetic",
+            symbol: targetMarket.name.toUpperCase(),
+            action: targetMarket.action,
+            entry: `Digit ${targetMarket.entryDigit}`,
+            sl: `Confidence: ${targetMarket.strength}%`,
+            isDerivStyle: true,
+            strategyName: targetMarket.strategy,
+            ticksCount: targetMarket.ticks,
+            botName: "USE SNIPPER KILLER BOT",
+            entryDigit: targetMarket.entryDigit,
+            confidence: `${targetMarket.strength}%`,
+            promoUrl: "https://mrzetuzetu.site",
+            riskGuidelines: "• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs",
+            botSignature: "mrzetuzetu Over/Under Bot",
+            hashtags: "#TradingSignal #Deriv #OverUnder"
+          })
+        });
+
+        const data = await response.json();
+        
+        if (response.ok && data.signal) {
+          finalHtml = data.signal;
+          finalRationale = data.rationale;
+          setAutoLog((prev) => [`✨ Gemini AI formulated custom algorithmic logic successfully.`, ...prev.slice(0, 49)]);
+        } else {
+          throw new Error("AI payload was incomplete.");
+        }
+      } else {
+        // compiler template fallback
+        finalHtml = compileTemplateSignal(targetMarket);
+        finalRationale = `Under/Over Digit contract optimized on ${targetMarket.name} ticks cycle. Pattern anomaly based on '${targetMarket.strategy}' strategy with trigger on digit '${targetMarket.entryDigit}' and algorithmic trend rating placed at ${targetMarket.strength}%.`;
+        setAutoLog((prev) => [`⚡ Bot compiler compiled exact requested signal layout immediately.`, ...prev.slice(0, 49)]);
+      }
+
+      // Sync onto draft workspace on top bar
+      onSignalGenerated({
+        assetClass: "Deriv Synthetic",
+        symbol: targetMarket.name,
+        action: targetMarket.action,
+        entry: `Digit ${targetMarket.entryDigit}`,
+        tp1: targetMarket.action,
+        tp2: "",
+        tp3: "",
+        sl: `Confidence: ${targetMarket.strength}%`,
+        formattedText: finalHtml,
+        rationale: finalRationale
+      });
+
+      // Save into active states
+      setActiveContract({
+        symbol: targetMarket.name,
+        action: targetMarket.action,
+        strength: targetMarket.strength,
+        strategy: targetMarket.strategy,
+        entryDigit: targetMarket.entryDigit,
+        formattedText: finalHtml,
+        ticks: targetMarket.ticks,
+        startedAt: Date.now()
+      });
+
+      // Transmit to active state directly!
+      setScannerState("ACTIVE_SIGNAL");
+      setTimerLeft(activeSignalDuration);
+
+      playBeep(1205, 0.2);
+
+      // Post direct to Telegram
+      if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
+        if (!configRef.current.botToken || !configRef.current.chatId) {
+          const logWarn = `❌ Broadcast aborted: Bot token / chatId not found in config. Please setup standard credentials first!`;
+          setAutoLog((prev) => [logWarn, ...prev.slice(0, 49)]);
+          return;
+        }
+
+        const logCast = `📡 Auto-broadcasting setup alert directly to ${configRef.current.chatId}...`;
+        setAutoLog((prev) => [logCast, ...prev.slice(0, 49)]);
+
+        const res = await onPostDirectTelegram(finalHtml);
+        if (res.success) {
+          setAutoLog((prev) => [`🚀 SENSATIONAL! Live signal sent to Telegram. Tracking expiration under ${activeSignalDuration}s counter.`, ...prev.slice(0, 49)]);
+        } else {
+          setAutoLog((prev) => [`❌ Post error: ${res.error || "failed."}`, ...prev.slice(0, 49)]);
+        }
+      }
+
+    } catch (err: any) {
+      // Emergency compilation fallback
+      const compiledHtml = compileTemplateSignal(targetMarket);
+      const compiledRationale = `Emergency digit pattern validation triggered high probability setup on ${targetMarket.name}. Strategy: ${targetMarket.strategy}.`;
+      
+      onSignalGenerated({
+        assetClass: "Deriv Synthetic",
+        symbol: targetMarket.name,
+        action: targetMarket.action,
+        entry: `Digit ${targetMarket.entryDigit}`,
+        tp1: targetMarket.action,
+        tp2: "",
+        tp3: "",
+        sl: `Confidence: ${targetMarket.strength}%`,
+        formattedText: compiledHtml,
+        rationale: compiledRationale
+      });
+
+      setActiveContract({
+        symbol: targetMarket.name,
+        action: targetMarket.action,
+        strength: targetMarket.strength,
+        strategy: targetMarket.strategy,
+        entryDigit: targetMarket.entryDigit,
+        formattedText: compiledHtml,
+        ticks: targetMarket.ticks,
+        startedAt: Date.now()
+      });
+
+      setScannerState("ACTIVE_SIGNAL");
+      setTimerLeft(activeSignalDuration);
+
+      const logErr = `⚠️ Fallback composed (Gemini connection error: ${err.message || "Timeout"}). Active clock running.`;
+      setAutoLog((prev) => [logErr, ...prev.slice(0, 49)]);
+
+      // Direct post fallback to Telegram if auto-broadcasting rules are turned on
+      if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
+        if (configRef.current.botToken && configRef.current.chatId) {
+          const logCast = `📡 [Fallback Broadcast] Sending signal fallback directly to Telegram...`;
+          setAutoLog((prevLogs) => [logCast, ...prevLogs.slice(0, 49)]);
+          
+          onPostDirectTelegram(compiledHtml).then((res) => {
+            if (res.success) {
+              setAutoLog((prevLogs) => [`🚀 SENSATIONAL! Fallback signal sent to Telegram successfully.`, ...prevLogs.slice(0, 49)]);
+            } else {
+              setAutoLog((prevLogs) => [`❌ Post fallback warning: ${res.error || "failed."}`, ...prevLogs.slice(0, 49)]);
+            }
+          }).catch((tErr) => {
+            setAutoLog((prevLogs) => [`❌ Fallback transmission failure: ${tErr.message}`, ...prevLogs.slice(0, 49)]);
+          });
+        }
+      }
+    } finally {
+      setGeneratingSignal(false);
+    }
+  };
+
+  const forceManualScanAndSelect = () => {
+    if (scannerState !== "SCANNING") {
+      setAutoLog((prev) => [`⚠️ Action Blocked: Scanner is currently locked in ${scannerState} state (${timerLeft}s remaining).`, ...prev.slice(0, 49)]);
+      return;
+    }
+
+    // Select the strongest index setting
+    const sorted = [...markets].sort((a, b) => b.strength - a.strength);
+    const top = sorted[0];
+    
+    setAutoLog((prev) => [
+      `🎯 Manual evaluation requested. Intercepting tick waves...`,
+      `🏆 Identified peak index: ${top.name} [Confidence score: ${top.strength}%]`,
+      ...prev.slice(0, 48)
+    ]);
+
+    handleTriggerDetection(top);
+  };
+
+  const formatHourTimer = (totalSeconds: number) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    
+    const hStr = String(hours).padStart(2, "0");
+    const mStr = String(minutes).padStart(2, "0");
+    const sStr = String(seconds).padStart(2, "0");
+    
+    return `${hStr}:${mStr}:${sStr}`;
+  };
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6" id="autobot-scanner-card">
+      
+      {/* 1. STATE-MACHINE HEADER STATUS BAR */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 bg-slate-950 rounded-xl p-4 border border-slate-850 gap-4" id="engine-chassis-signals">
+        <div className="flex items-center gap-3.5 border-r border-slate-800/80 pr-2 last:border-0">
+          <div className="p-3 bg-slate-900 rounded-lg shrink-0">
+            <Cpu className={`w-5 h-5 ${isRunning ? "text-[#2ac1f6] animate-pulse" : "text-slate-500"}`} />
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Scanner Health</div>
+            <div className="text-sm font-black flex items-center gap-1.5 strings-text text-white">
+              <span className={`w-2 h-2 rounded-full ${isRunning ? "bg-emerald-400" : "bg-red-400"}`} />
+              <span>{isRunning ? "ACTIVE MONITOR" : "PAUSED"}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* CURRENT DYNAMIC STATE CHASSIS */}
+        <div className="flex items-center gap-3.5 border-r border-slate-800/80 pr-2 last:border-0 col-span-1 lg:col-span-2 justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-slate-900 rounded-lg">
+              {scannerState === "SCANNING" && <Activity className="w-5 h-5 text-emerald-400 animate-pulse" />}
+              {scannerState === "ACTIVE_SIGNAL" && <Flame className="w-5 h-5 text-rose-400 animate-bounce" />}
+              {scannerState === "COOLDOWN" && <Hourglass className="w-5 h-5 text-amber-400 animate-spin" />}
+            </div>
+            <div>
+              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Bot Automation Phase</div>
+              <div className="text-sm font-black text-white">
+                {scannerState === "SCANNING" && (
+                  <span className="text-emerald-400 font-sans flex items-center gap-1.5">
+                    <span className="flex h-1.5 w-1.5 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                    </span>
+                    <span>
+                      {broadcastFrequency === "hourly" 
+                        ? "HOURLY DISPATCH" 
+                        : "DYNAMIC MONITOR"}
+                    </span>
+                    <span className="text-xs font-normal text-slate-450 lowercase">
+                      {broadcastFrequency === "hourly"
+                        ? `(${hourlyIntervalMinutes}m interval)`
+                        : `(>= ${minStrengthThreshold}%)`}
+                    </span>
+                  </span>
+                )}
+                {scannerState === "ACTIVE_SIGNAL" && (
+                  <span className="text-rose-400 font-sans flex items-center gap-1">
+                    <span>LIVE SIGNAL RUNNING</span>
+                    <span className="text-xs font-normal text-slate-450 lowercase">({activeContract?.symbol.split(" ")[1]} Idx)</span>
+                  </span>
+                )}
+                {scannerState === "COOLDOWN" && (
+                  <span className="text-amber-400 font-sans flex items-center gap-1">
+                    <span>COOLDOWN RESTRICTION ACTIVE</span>
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* COUNTDOWN CLOCK */}
+          {(scannerState === "ACTIVE_SIGNAL" || scannerState === "COOLDOWN" || (scannerState === "SCANNING" && broadcastFrequency === "hourly")) && (
+            <div className="bg-slate-900 px-4 py-2 rounded-lg border border-slate-850 flex items-center gap-3 font-mono shrink-0">
+              <Clock className="w-4 h-4 text-[#2ac1f6] shrink-0" />
+              <div>
+                <div className="text-[9px] uppercase tracking-widest text-[#2ac1f6] font-bold">
+                  {scannerState === "ACTIVE_SIGNAL" 
+                    ? "EXPIRING IN" 
+                    : scannerState === "COOLDOWN" 
+                    ? "SAFE SCAN IN" 
+                    : "NEXT DISPATCH"}
+                </div>
+                <div className="text-sm font-black text-white tracking-wide font-mono">
+                  {scannerState === "SCANNING" && broadcastFrequency === "hourly" 
+                    ? formatHourTimer(hourlyTimerLeft) 
+                    : `${timerLeft}s`}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* CORE INFORMATION BANNERS */}
+      {scannerState === "ACTIVE_SIGNAL" && activeContract && (
+        <div className="bg-rose-950/20 border border-rose-900/40 rounded-xl p-4 space-y-2 animate-fade-in" id="active-expired-card-banner">
+          <div className="flex items-center gap-2 text-rose-300 font-bold text-xs font-sans">
+            <Radio className="w-4 h-4 text-rose-450 animate-pulse" />
+            <span>Active Volatility Digit Signal Dispatch Live</span>
+          </div>
+          <p className="text-xs text-slate-350 leading-relaxed">
+            The Bot formulated and successfully posted a <b>{activeContract.action}</b> digit contract signal on <b>{activeContract.symbol}</b> with confidence level <b>{activeContract.strength}%</b>. Subscriptions are following this setup.
+          </p>
+          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 bg-slate-950/50 p-2 rounded border border-slate-900">
+            <span>⌛ Auto-Expiry Countdown Progress: {timerLeft}s left</span>
+            <span>🚨 WILL BROADCAST EXPIRY ALERT AT 0s!</span>
+          </div>
+        </div>
+      )}
+
+      {scannerState === "COOLDOWN" && (
+        <div className="bg-amber-950/15 border border-amber-900/30 rounded-xl p-4 space-y-2.5 animate-fade-in" id="active-cooldown-card-banner">
+          <div className="flex items-center gap-2 text-amber-300 font-bold text-xs font-sans">
+            <Hourglass className="w-4 h-4 text-amber-400 animate-spin" />
+            <span>Informing Users: Pattern Cool-down Loop</span>
+          </div>
+          <p className="text-xs text-slate-350 leading-relaxed">
+            The scanner is protecting users' risk lines by pausing new trade requests for <b>{cooldownDuration} seconds</b>. Traders are advised to pause automated bots inside this window.
+          </p>
+          <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-900 text-center">
+            <span className="text-[11px] font-mono text-amber-400">
+              ⚡ Next scan cycles automatically unlocked in: <b>{timerLeft} seconds</b>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* CARD HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
+            </span>
+            <h2 className="text-sm font-extrabold text-white tracking-widest uppercase font-mono flex items-center gap-2">
+              <Server className="w-4 h-4 text-indigo-400" />
+              <span>Realtime Scanner Engine Config</span>
+            </h2>
+          </div>
+          <p className="text-xs text-slate-400">
+            Scanning all 10 synthetic assets to capture anomalies {">="} 85%. Alerts expire automatically.
+          </p>
+        </div>
+
+        {/* SCANNER STATS & CONTROLS */}
+        <div className="flex items-center gap-2 shrink-0">
+          {isRunning ? (
+            <button
+              onClick={() => {
+                setIsRunning(false);
+                setAutoLog((prev) => ["⏸️ Scanner engine paused. Manual controls active.", ...prev.slice(0, 49)]);
+              }}
+              className="py-1.5 px-3 bg-rose-950/40 text-rose-300 border border-rose-900/40 rounded-xl hover:text-white hover:bg-rose-900/30 transition-all text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              id="pause-scans"
+            >
+              <Square className="w-3 h-3 fill-rose-300/10" />
+              <span>Pause Bot</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                setIsRunning(true);
+                setAutoLog((prev) => ["▶️ Scanner running. Searching indexes...", ...prev.slice(0, 49)]);
+              }}
+              className="py-1.5 px-3 bg-emerald-950/50 text-emerald-300 border border-emerald-900/40 rounded-xl hover:text-white hover:bg-emerald-900/30 transition-all text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              id="start-scans"
+            >
+              <Play className="w-3 h-3 fill-emerald-300/10" />
+              <span>Activate Bot</span>
+            </button>
+          )}
+
+          <button
+            onClick={forceManualScanAndSelect}
+            disabled={scannerState !== "SCANNING"}
+            className="py-1.5 px-3 bg-sky-950/80 text-sky-300 border border-sky-900 disabled:border-slate-800 disabled:text-slate-600 text-xs font-semibold rounded-xl hover:text-white hover:bg-sky-900 transition-all flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+            id="force-scans"
+          >
+            <RefreshCw className={`w-3 h-3 ${generatingSignal ? "animate-spin text-amber-300" : ""}`} />
+            <span>Force Instant Scan</span>
+          </button>
+        </div>
+      </div>
+
+      {/* STRONGEST SPOTLIGHT PANEL */}
+      {strongestMarket && (
+        <div className="bg-gradient-to-r from-sky-950/40 via-slate-950/85 to-indigo-950/30 border border-sky-900/40 rounded-xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 relative overflow-hidden" id="strongest-ticker-spotlight">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-sky-500/10 rounded-full blur-2xl -mr-12 -mt-12 pointer-events-none"></div>
+          
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <span className="px-2 py-0.5 bg-sky-450/15 text-sky-400 font-mono font-bold tracking-wider rounded-lg text-[9px] uppercase border border-sky-500/25 flex items-center gap-1">
+                <Zap className="w-2.5 h-2.5 fill-sky-400/20" />
+                <span>Peak Strength Index</span>
+              </span>
+              <span className="text-[10px] text-slate-500 font-mono">ID: {strongestMarket.id}</span>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-base font-bold text-white tracking-tight flex items-center gap-2">
+                <span>{strongestMarket.name}</span>
+                <span className="text-sky-300 font-mono text-sm font-semibold">${strongestMarket.price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+              <div className="text-xs text-slate-300 flex items-center gap-3">
+                <span className="flex items-center gap-1">
+                  🎯 Auto-Trade target: <b className="text-amber-400 font-mono">{strongestMarket.action}</b>
+                </span>
+                <span>•</span>
+                <span className="flex items-center gap-1">
+                  🧠 Strategy: <small className="text-emerald-400 font-medium font-sans">{strongestMarket.strategy}</small>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0 select-none">
+            <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-2.5 text-center px-4 font-mono">
+              <div className="text-[10px] text-slate-500 uppercase font-semibold">Trend Score</div>
+              <div className="text-2xl font-black text-sky-400 flex items-baseline justify-center">
+                <span>{strongestMarket.strength}</span>
+                <span className="text-xs font-normal text-sky-550">%</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => handleTriggerDetection(strongestMarket)}
+              disabled={generatingSignal || scannerState !== "SCANNING"}
+              className="px-4 py-3.5 text-xs font-bold bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-600 text-white rounded-xl shadow-lg shadow-sky-500/10 cursor-pointer flex items-center gap-2 disabled:cursor-not-allowed"
+              id="draft-trigger"
+            >
+              <Sparkles className="w-4 h-4 text-xs text-yellow-300" />
+              <span>Draft Setup</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* RANGE CONTROLS & TRADING RULES FOR THE BOT SCANNER */}
+      <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 space-y-4 font-sans text-xs">
+        <span className="text-xs font-extrabold text-white flex items-center gap-1.5 border-b border-slate-900 pb-2 uppercase tracking-wide">
+          <Gauge className="w-3.5 h-3.5 text-[#2ac1f6]" />
+          <span>Scanner Trigger Strategy Configurations</span>
+        </span>
+
+        {/* 3 SLIDERS FOR DYNAMIC STRENGTH TARGET, SIGNAL LIFETIME, COOLDOWN LIFETIME */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Slider 1: Min Strength Threshold */}
+          <div className="space-y-2">
+            <div className="flex justify-between items-center text-[11px]">
+              <span className="text-slate-300 font-semibold flex items-center gap-1">
+                <TrendingUp className="w-3.5 h-3.5 text-sky-400" />
+                <span>Min Signal Confidence Trigger</span>
+              </span>
+              <span className="text-[#2ac1f6] font-bold font-mono text-xs">{minStrengthThreshold}%</span>
+            </div>
+            <input
+              type="range"
+              min="75"
+              max="95"
+              step="1"
+              value={minStrengthThreshold}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                setMinStrengthThreshold(val);
+                setAutoLog((prev) => [`⚙️ Trigger threshold adjusted to >= ${val}% strength.`, ...prev.slice(0, 49)]);
+              }}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-[#2ac1f6]"
+              id="range-threshold-slider"
+            />
+            <p className="text-[10px] text-slate-500">The scanner will only share target indices matching this exact strength level or above (default 85%).</p>
+          </div>
+
+          {/* Slider 2: Contract active lifespan */}
+          <div className="space-y-2">
+            <div className="flex justify-between items-center text-[11px]">
+              <span className="text-slate-300 font-semibold flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-rose-400" />
+                <span>Active Lifetime Plan</span>
+              </span>
+              <span className="text-rose-450 font-bold font-mono text-xs">
+                {activeSignalDuration}s ({Math.floor(activeSignalDuration / 60)}m{activeSignalDuration % 60 > 0 ? ` ${activeSignalDuration % 60}s` : ""})
+              </span>
+            </div>
+            <input
+              type="range"
+              min="15"
+              max="600"
+              step="15"
+              value={activeSignalDuration}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                setActiveSignalDuration(val);
+              }}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-rose-500"
+              id="range-expiry-slider"
+            />
+            <p className="text-[10px] text-slate-500">The amount of seconds the signal contract is considered "live" before broadcasting expiration.</p>
+          </div>
+
+          {/* Slider 3: Cooldown Duration */}
+          <div className="space-y-2">
+            <div className="flex justify-between items-center text-[11px]">
+              <span className="text-slate-300 font-semibold flex items-center gap-1">
+                <Hourglass className="w-3.5 h-3.5 text-amber-400" />
+                <span>Cooldown Hold Interval</span>
+              </span>
+              <span className="text-amber-450 font-bold font-mono text-xs">{cooldownDuration} seconds</span>
+            </div>
+            <input
+              type="range"
+              min="10"
+              max="90"
+              step="5"
+              value={cooldownDuration}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                setCooldownDuration(val);
+              }}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+              id="range-cooldown-slider"
+            />
+            <p className="text-[10px] text-slate-500">How long to wait after expiring before scanning resumes. Informs users on-screen.</p>
+          </div>
+        </div>
+
+        {/* AUTOMATION PREFERENCE CONFIGURATION */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-4 border-t border-slate-900 text-xs">
+          {/* Column 1: Mode & Cadence Interval Settings */}
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-slate-350 font-bold block">Signal Broadcast Mode</label>
+              <div className="grid grid-cols-2 gap-1 bg-slate-900 p-0.5 border border-slate-850 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBroadcastFrequency("hourly");
+                    setHourlyTimerLeft(hourlyIntervalMinutes * 60);
+                    setAutoLog((prev) => ["🎯 Broadcast Mode: Strict Hourly Schedule activated.", ...prev.slice(0, 49)]);
+                  }}
+                  className={`py-1.5 px-2 text-[10px] font-bold rounded-md transition-all cursor-pointer text-center ${
+                    broadcastFrequency === "hourly"
+                      ? "bg-slate-800 text-[#2ac1f6] shadow-sm font-black"
+                      : "text-slate-500 hover:text-slate-350"
+                  }`}
+                >
+                  Strict Hour Cycle
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBroadcastFrequency("dynamic");
+                    setAutoLog((prev) => ["🎯 Broadcast Mode: Real-time Pattern Spike activated.", ...prev.slice(0, 49)]);
+                  }}
+                  className={`py-1.5 px-2 text-[10px] font-bold rounded-md transition-all cursor-pointer text-center ${
+                    broadcastFrequency === "dynamic"
+                      ? "bg-slate-800 text-emerald-400 shadow-sm font-black"
+                      : "text-slate-500 hover:text-slate-350"
+                  }`}
+                >
+                  Pattern Spike
+                </button>
+              </div>
+            </div>
+
+            {/* Conditionally show hourly cycle settings */}
+            {broadcastFrequency === "hourly" ? (
+              <div className="space-y-2 bg-slate-900/60 p-2.5 rounded-lg border border-slate-850/60">
+                <div className="flex justify-between items-center text-[10.5px]">
+                  <span className="text-slate-400 font-medium font-sans">Hourly Cadence Plan:</span>
+                  <span className="text-[#2ac1f6] font-bold">{hourlyIntervalMinutes} min</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="120"
+                  step="1"
+                  value={hourlyIntervalMinutes}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    setHourlyIntervalMinutes(val);
+                    setHourlyTimerLeft(val * 60);
+                    setAutoLog((prev) => [`⚙️ Hourly Cadence updated: ${val} minutes. Timer reset.`, ...prev.slice(0, 49)]);
+                  }}
+                  className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-[#2ac1f6]"
+                />
+                
+                <div className="flex items-center gap-1.5 pt-1.5 justify-between">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHourlyTimerLeft(10);
+                      setAutoLog((prev) => ["⏩ Accelerated: Next hourly dispatch scheduled in 10 seconds for testing!", ...prev.slice(0, 49)]);
+                    }}
+                    className="flex-1 py-1 px-1.5 bg-slate-850 hover:bg-slate-750 text-[#2ac1f6] border border-slate-700/80 rounded text-[9px] font-semibold text-center cursor-pointer transition-colors"
+                  >
+                    ⏩ Fast Test (10s)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHourlyTimerLeft(1);
+                      setAutoLog((prev) => ["⚡ Hourly Trigger Force Dispatching Immediately...", ...prev.slice(0, 49)]);
+                    }}
+                    className="flex-1 py-1 px-1.5 bg-[#035a76]/45 hover:bg-[#035a76]/65 text-cyan-300 border border-cyan-900/40 rounded text-[9px] font-semibold text-center cursor-pointer transition-colors"
+                  >
+                    ⚡ Force Now
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[10px] text-slate-500 leading-tight italic">
+                In Pattern Spike mode, signals are transmitted dynamically as soon as an asset hits the {minStrengthThreshold}% confidence threshold.
+              </p>
+            )}
+          </div>
+
+          {/* Column 2: Specific Over / Under Barriers Option Lists */}
+          <div className="space-y-2 lg:col-span-1">
+            <div className="flex justify-between items-center">
+              <label className="text-slate-350 font-bold block">Digit Barriers Matrix ({activeContracts.length} active)</label>
+              <div className="flex gap-1.5 text-[9px] font-mono">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveContracts(["OVER 1", "OVER 2", "OVER 3", "OVER 4", "UNDER 6", "UNDER 7", "UNDER 8", "UNDER 9"]);
+                    setAutoLog((prev) => ["⚙️ Selected all 8 Over/Under trade barrier targets.", ...prev.slice(0, 49)]);
+                  }}
+                  className="text-slate-400 hover:text-white cursor-pointer hover:underline"
+                >
+                  All
+                </button>
+                <span className="text-slate-700">|</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveContracts([]);
+                    setAutoLog((prev) => ["⚠️ Selection cleared. Please select at least 1 digit barrier setup.", ...prev.slice(0, 49)]);
+                  }}
+                  className="text-slate-400 hover:text-white cursor-pointer hover:underline"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-4 gap-1.5" id="monitored-barriers-matrix-gui">
+              {["OVER 1", "OVER 2", "OVER 3", "OVER 4", "UNDER 6", "UNDER 7", "UNDER 8", "UNDER 9"].map((b) => {
+                const isActive = activeContracts.includes(b);
+                const isOver = b.startsWith("OVER");
+                return (
+                  <button
+                    key={b}
+                    type="button"
+                    onClick={() => {
+                      if (isActive) {
+                        setActiveContracts((prev) => prev.filter((item) => item !== b));
+                        setAutoLog((prev) => [`❌ Removed barrier ${b} from scanner list.`, ...prev.slice(0, 49)]);
+                      } else {
+                        setActiveContracts((prev) => [...prev, b]);
+                        setAutoLog((prev) => [`` + `✅ Added barrier ${b} to active scanner setup.`, ...prev.slice(0, 49)]);
+                      }
+                    }}
+                    className={`py-1 rounded font-mono font-bold text-[9px] transition-all border text-center cursor-pointer ${
+                      isActive 
+                        ? isOver 
+                          ? "bg-emerald-950/45 text-emerald-300 border-emerald-800/60" 
+                          : "bg-sky-950/45 text-sky-300 border-sky-800/60"
+                        : "bg-slate-900 text-slate-600 border-slate-850 hover:border-slate-750/80"
+                    }`}
+                  >
+                    {b}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-slate-550 leading-tight">
+              Bot scans <strong>only</strong> for selected Over/Under digit conditions. Fits exactly with channel instructions.
+            </p>
+          </div>
+
+          {/* Column 3: Auto-Broadcasting Feed Switch */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-slate-350 font-bold block flex items-center gap-1.5">
+                <Radio className="text-rose-400 w-3.5 h-3.5 animate-pulse" />
+                <span>Auto-Broadcasting Channel</span>
+              </label>
+              <span className={`text-[8.5px] uppercase px-1.5 py-0.2 rounded font-black border ${
+                autoBroadcast ? "bg-rose-950 text-rose-300 border-rose-900/40" : "bg-slate-900 text-slate-500 border-slate-800"
+              }`}>
+                {autoBroadcast ? "LIVE ACTIVE" : "MANUAL ONLY"}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-snug">
+              When active, the scanner automatically pushes setups, expirations, and ready status announcements directly to Telegram.
+            </p>
+            
+            <div className="grid grid-cols-2 gap-1.5 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoBroadcast(false);
+                  setAutoLog((prev) => ["🔒 Auto-broadcast disabled. Setup alerts will wait for manual approvals.", ...prev.slice(0, 49)]);
+                }}
+                className={`py-1.5 px-2 text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                  !autoBroadcast
+                    ? "bg-slate-850 text-white border border-slate-700/50"
+                    : "bg-slate-905 text-slate-450 border border-slate-850 hover:bg-slate-800/30"
+                }`}
+              >
+                Compose Drafts Only
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoBroadcast(true);
+                  setAutoLog((prev) => ["🚀 Auto-broadcast enabled! Transmitting hourly plans directly to Telegram.", ...prev.slice(0, 49)]);
+                }}
+                className={`py-1.5 px-2 text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                  autoBroadcast
+                    ? "bg-rose-950/55 text-rose-300 border border-rose-900/40"
+                    : "bg-slate-905 text-slate-455 border border-slate-850 hover:bg-slate-800/30"
+                }`}
+              >
+                Auto-Broadcast Live
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* MULTI-MARKET STATUS GRID */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 px-1 uppercase tracking-wider">
+          <span>Real-time Market Matrix (Matching Criteria Check)</span>
+          <span>Index Trend Strength vs Target</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="volatility-grid-10-markets">
+          {markets.map((m) => {
+            const isHighest = strongestMarket?.id === m.id;
+            const matchesThreshold = m.strength >= minStrengthThreshold;
+            return (
+              <div
+                key={m.id}
+                onClick={() => {
+                  setStrongestMarket(m);
+                  playBeep(1000, 0.04);
+                }}
+                className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition-all ${
+                  isHighest 
+                    ? "border-sky-500/60 bg-sky-950/10 shadow-md scale-[1.01]" 
+                    : matchesThreshold
+                    ? "border-emerald-500/40 bg-emerald-950/5"
+                    : "border-slate-850 bg-slate-950/60 hover:bg-slate-950"
+                }`}
+                id={`market-idx-item-${m.id}`}
+              >
+                <div className="space-y-1.5 flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <CircleDot className={`w-2.5 h-2.5 ${
+                      isHighest 
+                        ? "text-sky-400 animate-pulse" 
+                        : matchesThreshold 
+                        ? "text-emerald-400" 
+                        : "text-slate-600"
+                    }`} />
+                    <h3 className="text-xs font-bold text-slate-100 truncate tracking-wide">{m.name}</h3>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-450">
+                    <span className="truncate text-slate-300 font-semibold">${m.price.toFixed(2)}</span>
+                    <span className={`text-[9px] border px-1.5 py-0.2 rounded font-bold ${
+                      matchesThreshold 
+                        ? "bg-emerald-950/30 text-emerald-400 border-emerald-900/30" 
+                        : "bg-slate-900 text-slate-500 border-slate-800"
+                    }`}>
+                      {m.action}
+                    </span>
+                  </div>
+
+                  {/* Tick Digital Flow bar */}
+                  <div className="flex items-center gap-1 font-mono text-[9px] text-slate-500 pt-0.5">
+                    <span className="text-[8px] uppercase tracking-wider">Ticks pattern:</span>
+                    <div className="flex gap-0.5">
+                      {m.lastDigits.map((dig, idx) => {
+                        const isTrigger = String(dig) === m.entryDigit;
+                        return (
+                          <span 
+                            key={idx} 
+                            className={`w-3.5 h-3.5 rounded flex items-center justify-center font-bold font-mono transition-colors text-[9px] ${
+                              isTrigger 
+                                ? "bg-amber-950/80 text-amber-300 border border-amber-500/20 animate-pulse" 
+                                : dig < 7 
+                                ? "bg-emerald-950/30 text-emerald-400" 
+                                : "bg-slate-900 text-slate-500"
+                            }`}
+                          >
+                            {dig}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Score Dial status bar representation */}
+                <div className="text-right shrink-0 min-w-[70px] space-y-1 text-right font-sans">
+                  <div className="flex items-baseline justify-end font-mono">
+                    <span className={`text-sm font-black ${
+                      matchesThreshold ? "text-sky-400" : "text-slate-500"
+                    }`}>{m.strength}%</span>
+                  </div>
+
+                  {/* Horizontal visual meter bar */}
+                  <div className="w-16 bg-slate-900 h-1 rounded-full overflow-hidden ml-auto">
+                    <div 
+                      className={`h-full transition-all duration-300 ${
+                        matchesThreshold ? "bg-[#2ac1f6]" : m.strength >= 75 ? "bg-indigo-500" : "bg-slate-700"
+                      }`} 
+                      style={{ width: `${m.strength}%` }}
+                    />
+                  </div>
+
+                  <div className="text-[8px] font-mono font-bold tracking-wider uppercase">
+                    {matchesThreshold ? (
+                      <span className="text-emerald-405">TARGET MATCH</span>
+                    ) : (
+                      <span className="text-slate-600">SCAN EXCLUDED</span>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* LIVE SCANNER LOGGER LIST */}
+      <div className="space-y-1.5 text-xs">
+        <div className="flex items-center justify-between text-slate-405 px-1 font-bold text-[10px] uppercase font-mono tracking-widest">
+          <span>Scanner Console Monitoring Protocol</span>
+          <span className="text-[#2ac1f6] font-bold">TICKS STREAM COUNT ({scannedCount})</span>
+        </div>
+
+        <div className="h-32 bg-[#090e18] border border-slate-850 rounded-xl p-3 font-mono text-[10.5px] leading-relaxed text-slate-350 space-y-1.5 overflow-y-auto" id="scanner-logger-listbox">
+          {autoLog.map((log, idx) => (
+            <div key={idx} className="flex items-start gap-1.5 border-b border-slate-950/60 pb-1.5 last:border-b-0 hover:text-white">
+              <span className="text-slate-600 shrink-0 select-none">[{idx}]</span>
+              <span className="break-all">{log}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+    </div>
+  );
+}
