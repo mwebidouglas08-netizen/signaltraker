@@ -1,5 +1,31 @@
-import React, { useState } from "react";
-import { Sparkles, Coins, ArrowRight, ShieldAlert, HelpCircle, Laptop, Landmark } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { 
+  Sparkles, 
+  Coins, 
+  ArrowRight, 
+  ShieldAlert, 
+  HelpCircle, 
+  Laptop, 
+  Landmark, 
+  Radio, 
+  BellRing, 
+  RefreshCw, 
+  Megaphone, 
+  Hourglass, 
+  CheckSquare, 
+  Save, 
+  Trash2, 
+  FolderSync,
+  Calendar,
+  AlertCircle,
+  Navigation,
+  ChevronDown,
+  Check,
+  Bell,
+  RotateCcw,
+  FileText,
+  CheckCircle2
+} from "lucide-react";
 
 interface Props {
   onSignalGenerated: (signalData: {
@@ -13,11 +39,14 @@ interface Props {
     sl: string;
     formattedText: string;
     rationale: string;
-  }) => void;
+  }, skipAutoBroadcast?: boolean) => void;
   aiConfigured: boolean;
   autoShareEnabled: boolean;
   onAutoShareToggle: (value: boolean) => void;
   telegramConfigChatId?: string;
+  onPostDirectTelegram?: (text: string) => Promise<{ success: boolean; messageId?: string; error?: string }>;
+  loadedTemplate?: any | null;
+  onClearLoadedTemplate?: () => void;
 }
 
 export default function TradingSignalForm({ 
@@ -25,10 +54,36 @@ export default function TradingSignalForm({
   aiConfigured,
   autoShareEnabled,
   onAutoShareToggle,
-  telegramConfigChatId
+  telegramConfigChatId,
+  onPostDirectTelegram,
+  loadedTemplate,
+  onClearLoadedTemplate
 }: Props) {
-  // Toggle tab: "classic" vs "deriv"
-  const [formMode, setFormMode] = useState<"classic" | "deriv">("deriv");
+  // Toggle tab: "classic" vs "deriv" vs "sequence"
+  const [formMode, setFormMode] = useState<"classic" | "deriv" | "sequence" >("deriv");
+
+  // Load template effect
+  useEffect(() => {
+    if (loadedTemplate) {
+      if (loadedTemplate.type?.includes("Digit") || loadedTemplate.type?.includes("Synthetic") || loadedTemplate.type?.includes("Derivative")) {
+        setFormMode("deriv");
+        setDerivSymbol(loadedTemplate.symbol || "");
+        setDerivAction(loadedTemplate.action || "");
+        setDerivStrategy(loadedTemplate.strategy || "");
+        setDerivRiskManagement(loadedTemplate.notes || "");
+      } else {
+        setFormMode("classic");
+        setAssetClass(loadedTemplate.type || "Forex");
+        setSymbol(loadedTemplate.symbol || "");
+        setAction(loadedTemplate.action || "BUY");
+        setUserNotes(loadedTemplate.notes || "");
+        setEntry("CMP");
+      }
+      if (onClearLoadedTemplate) {
+        onClearLoadedTemplate();
+      }
+    }
+  }, [loadedTemplate]);
 
   // --- COMMON OR CLASSIC MODE STATE ---
   const [assetClass, setAssetClass] = useState("Forex");
@@ -56,6 +111,509 @@ export default function TradingSignalForm({
   );
   const [derivBotSignature, setDerivBotSignature] = useState("mrzetuzetu Over/Under Bot");
   const [derivHashtags, setDerivHashtags] = useState("#TradingSignal #Deriv #OverUnder");
+
+  // --- OPTION 3: ALERT SEQUENCE MODE STATE ---
+  const [seqSymbol, setSeqSymbol] = useState("VOLATILITY 100 INDEX");
+  const [seqAction, setSeqAction] = useState("UNDER 7");
+  const [seqStrategy, setSeqStrategy] = useState("Second Least Digit");
+  const [seqPreSignal, setSeqPreSignal] = useState(
+    `🚨 <b>STANDBY ALERT TO MEMBERS</b> 🚨\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `⏳ <b>Preparing</b> an upcoming trade setup on <b>VOLATILITY 100 INDEX</b>.\n` +
+    `📢 <b>Bot Settings:</b> Second Least Digit Pattern\n` +
+    `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>\n\n` +
+    `🖥️ https://www.mrzetuzetu.site`
+  );
+  const [seqActiveSignal, setSeqActiveSignal] = useState(
+    `🔔 <b>ACTIVE TRADING SETUP BROADCAST</b> 🔔\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `📈 <b>Asset:</b> VOLATILITY 100 INDEX\n` +
+    `📊 <b>Contract:</b> UNDER 7\n` +
+    `⚡ <b>Strategy:</b> Second Least Digit\n\n` +
+    `🎯 Entry trigger active! Execute with correct risk models.\n` +
+    `🖥️ https://www.mrzetuzetu.site`
+  );
+  const [seqPostSignal, setSeqPostSignal] = useState(
+    `⌛ <b>COOLDOWN & NEXT READY</b> ⌛\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `✅ Previous alert sequence for <b>VOLATILITY 100 INDEX</b> is finalized!\n` +
+    `📡 <i>Entering temporary cooldown. Relax and prepare.</i>\n\n` +
+    `🔔 <b>Stay tuned!</b> We are already scanning for the next alert signal opportunity.`
+  );
+
+  const [transPreStatus, setTransPreStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
+  const [transActiveStatus, setTransActiveStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
+  const [transPostStatus, setTransPostStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
+  const [seqError, setSeqError] = useState("");
+
+  // --- INLINE TEMPLATE/BLUEPRINT SAVE STATE ---
+  const [showSaveTemplateForm, setShowSaveTemplateForm] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState("");
+  const [saveTemplateFeedback, setSaveTemplateFeedback] = useState("");
+
+  // --- HQ SCREENSHOT DRAFT SEQUENCER STATE ---
+  const [hqSignalName, setHqSignalName] = useState(() => {
+    return localStorage.getItem("hq_signal_name") || "Volatility 100 Index Breaker Alert";
+  });
+  const [hqSignalType, setHqSignalType] = useState(() => {
+    return localStorage.getItem("hq_signal_type") || "Derivative Digit Contract";
+  });
+  const [hqDescription, setHqDescription] = useState(() => {
+    return localStorage.getItem("hq_description") || "High-speed digit patterns scanning under digit 7 with multi-barrier resistance breakout confirmation.";
+  });
+  const [hqPriority, setHqPriority] = useState(() => {
+    return localStorage.getItem("hq_priority") || "High";
+  });
+
+  // Lead Alert (Column 1)
+  const [hqLeadTrigger, setHqLeadTrigger] = useState(() => {
+    return localStorage.getItem("hq_lead_trigger") || "Tick oscillation patterns print consecutive digits above 8 for 4 ticks, triggering standby condition.";
+  });
+  const [hqLeadAddInfo, setHqLeadAddInfo] = useState(() => {
+    return localStorage.getItem("hq_lead_add_info") || "Prepare binary account balance and confirm bot server ping is under 40ms.";
+  });
+  const [hqLeadChannels, setHqLeadChannels] = useState(() => {
+    return localStorage.getItem("hq_lead_channels") || "Telegram VIP Feed";
+  });
+  const [hqLeadRecipients, setHqLeadRecipients] = useState(() => {
+    return localStorage.getItem("hq_lead_recipients") || "@zeta_vip_members, #volatility-feed";
+  });
+
+  // Current Signal (Column 2)
+  const [hqCurrentTrigger, setHqCurrentTrigger] = useState(() => {
+    return localStorage.getItem("hq_current_trigger") || "Active Setup Triggered: Digit 9 prints on last tick. Contract UNDER 7 active.";
+  });
+  const [hqCurrentAddInfo, setHqCurrentAddInfo] = useState(() => {
+    return localStorage.getItem("hq_current_add_info") || "Martingale multiplier v2 activated. Maximum target depth set to 3 recovery steps.";
+  });
+  const [hqCurrentChannels, setHqCurrentChannels] = useState(() => {
+    return localStorage.getItem("hq_current_channels") || "Telegram Main Channel";
+  });
+  const [hqCurrentRecipients, setHqCurrentRecipients] = useState(() => {
+    return localStorage.getItem("hq_current_recipients") || "@mrzetuzetu_signals, #members-dashboard";
+  });
+
+  // Alert Going to be Sent (Column 3)
+  const [hqGoingTrigger, setHqGoingTrigger] = useState(() => {
+    return localStorage.getItem("hq_going_trigger") || "Final session cooldown alert and performance metrics overview.";
+  });
+  const [hqGoingAddInfo, setHqGoingAddInfo] = useState(() => {
+    return localStorage.getItem("hq_going_add_info") || "Total gain for sequence block is stable. Standby for next system scan cycle.";
+  });
+  const [hqGoingSendTime, setHqGoingSendTime] = useState(() => {
+    return localStorage.getItem("hq_going_send_time") || "2026-06-07T14:30";
+  });
+  const [hqGoingChannels, setHqGoingChannels] = useState(() => {
+    return localStorage.getItem("hq_going_channels") || "Telegram Main Channel, Discord Feed";
+  });
+  const [hqGoingRecipients, setHqGoingRecipients] = useState(() => {
+    return localStorage.getItem("hq_going_recipients") || "@mrzetuzetu_signals, #cooldown_tracker";
+  });
+
+  // General Settings Optional
+  const [hqTags, setHqTags] = useState(() => {
+    return localStorage.getItem("hq_tags") || "deriv, volatility100, second_least_digit, zeta";
+  });
+  const [hqNotes, setHqNotes] = useState(() => {
+    return localStorage.getItem("hq_notes") || "Always monitor the base index on Deriv SmartTrader before starting the automatic bot loop.";
+  });
+
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState("");
+
+  // --- PRESET SYSTEM FOR OPTION 3 ---
+  const defaultPresets: { id: string; name: string; symbol: string; action: string; strategy: string; preSignal: string; activeSignal: string; postSignal: string; }[] = [
+    {
+      id: "default-zeta",
+      name: "Mr Zetuzetu Volatility Setup 📈",
+      symbol: "VOLATILITY 100 INDEX",
+      action: "UNDER 7",
+      strategy: "Second Least Digit",
+      preSignal: 
+        `🚨 <b>STANDBY ALERT TO MEMBERS</b> 🚨\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `⏳ <b>Preparing</b> an upcoming trade setup on <b>VOLATILITY 100 INDEX</b>.\n` +
+        `📢 <b>Bot Settings:</b> Second Least Digit Pattern\n` +
+        `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>\n\n` +
+        `🖥️ https://www.mrzetuzetu.site`,
+      activeSignal:
+        `🔔 <b>ACTIVE TRADING SETUP BROADCAST</b> 🔔\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📈 <b>Asset:</b> VOLATILITY 100 INDEX\n` +
+        `📊 <b>Contract:</b> UNDER 7\n` +
+        `⚡ <b>Strategy:</b> Second Least Digit\n\n` +
+        `🎯 Entry trigger active! Execute with correct risk models.\n` +
+        `🖥️ https://www.mrzetuzetu.site`,
+      postSignal:
+        `⌛ <b>COOLDOWN & NEXT READY</b> ⌛\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `✅ Previous alert sequence for <b>VOLATILITY 100 INDEX</b> is finalized!\n` +
+        `📡 <i>Entering temporary cooldown. Relax and prepare.</i>\n\n` +
+        `🔔 <b>Stay tuned!</b> We are already scanning for the next alert signal opportunity.`
+    },
+    {
+      id: "crash-boom-sniper",
+      name: "Crash / Boom Sniper Config 🎯",
+      symbol: "CRASH 1000 INDEX",
+      action: "SELL (SPIKE SNIPER)",
+      strategy: "Stochastic Overbought Bounce",
+      preSignal: 
+        `🚨 <b>CRASH/BOOM SPIKE WARNING</b> 🚨\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ <b>Spike Area Approaching</b> on <b>CRASH 1000 INDEX</b>!\n` +
+        `🤖 <b>Setup:</b> Extreme Overbought Cluster on M1 Chart\n` +
+        `🚀 Standby to open your terminal. Prepare for massive spikes!`,
+      activeSignal:
+        `🔔 <b>LIVE SPIKE ALERTER ACTIVE</b> 🔔\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📈 <b>Asset:</b> CRASH 1000 INDEX\n` +
+        `📊 <b>Contract:</b> SELL SPIKE\n` +
+        `⚡ <b>Strategy:</b> Stochastic Overbought Cascade\n\n` +
+        `🎯 Keep Martingale ready for max 3 steps. Execute NOW!`,
+      postSignal:
+        `⌛ <b>SPIKE EVENT CLOSED</b> ⌛\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `✅ Setup is finished. Profit secured or stop level reached.\n` +
+        `📡 We are waiting for the next Stochastic consolidation cycle.`
+    },
+    {
+      id: "forex-gold-breakout",
+      name: "Gold/FX Standby Breakout 🏅",
+      symbol: "XAUUSD (GOLD)",
+      action: "BUY BREAKOUT",
+      strategy: "London Session Range Breakout",
+      preSignal: 
+        `🚨 <b>GOLD LONDON SESSION STANDBY</b> 🚨\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `⏳ <b>Gold (XAUUSD)</b> is consolidating tightly near resistance.\n` +
+        `📢 <b>Upcoming Breakout Signal</b> is drafting! Standby.`,
+      activeSignal:
+        `🔔 <b>GOLD ENTRY ACTIVE (TRIGGERED)</b> 🔔\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📈 <b>Asset:</b> XAUUSD (GOLD)\n` +
+        `📊 <b>Contract:</b> BUY ABOVE RESISTANCE\n` +
+        `⚡ <b>Strategy:</b> London Session Range Breakout\n\n` +
+        `🎯 Entry active! Keep SL below yesterday's low.`,
+      postSignal:
+        `⌛ <b>GOLD INTRADAY COOLDOWN</b> ⌛\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `✅ London session breakout cycle for GOLD is completed.\n` +
+        `📡 Resting and scanning for New York Open. Stay safe!`
+    }
+  ];
+
+  const [presets, setPresets] = useState(() => {
+    const saved = localStorage.getItem("seq_presets");
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return defaultPresets;
+      }
+    }
+    return defaultPresets;
+  });
+
+  const [selectedPresetId, setSelectedPresetId] = useState("default-zeta");
+  const [newPresetName, setNewPresetName] = useState("");
+
+  const handleSelectPreset = (id: string) => {
+    setSelectedPresetId(id);
+    const found = presets.find((p: any) => p.id === id);
+    if (found) {
+      setSeqSymbol(found.symbol);
+      setSeqAction(found.action);
+      setSeqStrategy(found.strategy);
+      setSeqPreSignal(found.preSignal);
+      setSeqActiveSignal(found.activeSignal);
+      setSeqPostSignal(found.postSignal);
+    }
+  };
+
+  const handleCreatePreset = () => {
+    if (!newPresetName.trim()) {
+      setSeqError("Please enter a name for your custom preset.");
+      return;
+    }
+    const newId = "preset-" + Date.now();
+    const newPreset = {
+      id: newId,
+      name: `${newPresetName.trim()} 💾`,
+      symbol: seqSymbol,
+      action: seqAction,
+      strategy: seqStrategy,
+      preSignal: seqPreSignal,
+      activeSignal: seqActiveSignal,
+      postSignal: seqPostSignal,
+    };
+    const updated = [newPreset, ...presets];
+    setPresets(updated);
+    localStorage.setItem("seq_presets", JSON.stringify(updated));
+    setSelectedPresetId(newId);
+    setNewPresetName("");
+    setSeqError("");
+  };
+
+  const handleDeletePreset = (id: string) => {
+    if (id === "default-zeta" || id === "crash-boom-sniper" || id === "forex-gold-breakout") {
+      setSeqError("Cannot delete default system presets.");
+      return;
+    }
+    const updated = presets.filter((p: any) => p.id !== id);
+    setPresets(updated);
+    localStorage.setItem("seq_presets", JSON.stringify(updated));
+    if (selectedPresetId === id) {
+      setTimeout(() => handleSelectPreset("default-zeta"), 50);
+    }
+    setSeqError("");
+  };
+
+  const handleSaveHqDraft = () => {
+    localStorage.setItem("hq_signal_name", hqSignalName);
+    localStorage.setItem("hq_signal_type", hqSignalType);
+    localStorage.setItem("hq_description", hqDescription);
+    localStorage.setItem("hq_priority", hqPriority);
+
+    localStorage.setItem("hq_lead_trigger", hqLeadTrigger);
+    localStorage.setItem("hq_lead_add_info", hqLeadAddInfo);
+    localStorage.setItem("hq_lead_channels", hqLeadChannels);
+    localStorage.setItem("hq_lead_recipients", hqLeadRecipients);
+
+    localStorage.setItem("hq_current_trigger", hqCurrentTrigger);
+    localStorage.setItem("hq_current_add_info", hqCurrentAddInfo);
+    localStorage.setItem("hq_current_channels", hqCurrentChannels);
+    localStorage.setItem("hq_current_recipients", hqCurrentRecipients);
+
+    localStorage.setItem("hq_going_trigger", hqGoingTrigger);
+    localStorage.setItem("hq_going_add_info", hqGoingAddInfo);
+    localStorage.setItem("hq_going_send_time", hqGoingSendTime);
+    localStorage.setItem("hq_going_channels", hqGoingChannels);
+    localStorage.setItem("hq_going_recipients", hqGoingRecipients);
+
+    localStorage.setItem("hq_tags", hqTags);
+    localStorage.setItem("hq_notes", hqNotes);
+
+    setSaveSuccessMessage("Draft Sequencer Settings Saved Successfully! 💾");
+    
+    // Compile and notify compose panel so they can see preview/emit too!
+    const compiledMessage = 
+      `🚨 <b>DRAFT SEQUENCE: ${hqSignalName.toUpperCase()}</b> 🚨\n` +
+      `📌 <b>Type:</b> ${hqSignalType} (Priority: ${hqPriority})\n` +
+      `📝 <i>${hqDescription}</i>\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `🟢 <b>1. LEAD WARNING (Early Alert)</b>\n` +
+      `• <b>Trigger:</b> ${hqLeadTrigger}\n` +
+      `• <b>Info:</b> ${hqLeadAddInfo}\n` +
+      `• <b>Channels:</b> ${hqLeadChannels}\n\n` +
+      `🔵 <b>2. ACTIVE SIGNAL (Live Play)</b>\n` +
+      `• <b>Setup:</b> ${hqCurrentTrigger}\n` +
+      `• <b>Info:</b> ${hqCurrentAddInfo}\n` +
+      `• <b>Channels:</b> ${hqCurrentChannels}\n\n` +
+      `🟠 <b>3. TARGET TRANSMIT (Scheduled)</b>\n` +
+      `• <b>Condition:</b> ${hqGoingTrigger}\n` +
+      `• <b>Info:</b> ${hqGoingAddInfo}\n` +
+      `• <b>Release Time:</b> ${hqGoingSendTime} UTC\n` +
+      `• <b>Channels:</b> ${hqGoingChannels}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🏷️ <b>Tags:</b> ${hqTags}\n` +
+      `💡 <b>Notes:</b> ${hqNotes}`;
+
+    onSignalGenerated({
+      assetClass: "Sequencer Blueprint",
+      symbol: hqSignalName,
+      action: "SEQUENCE ALERT",
+      entry: "Visual Sequencer",
+      tp1: "Lead Warning",
+      tp2: "Active",
+      tp3: "Scheduled Alert",
+      sl: hqPriority,
+      formattedText: compiledMessage,
+      rationale: `Multi-stage structured signal drafted and persisted. Lead Setup: ${hqLeadTrigger}. Current Setup: ${hqCurrentTrigger}. Scheduled Setup: ${hqGoingTrigger}. Notes: ${hqNotes}`,
+    }, true /* skipAutoBroadcast = true is key so the user can verify first! */);
+
+    setTimeout(() => {
+      setSaveSuccessMessage("");
+    }, 4000);
+  };
+
+  const handleCancelHqDraft = () => {
+    if (confirm("Are you sure you want to reset current draft edits? This will restore baseline examples.")) {
+      setHqSignalName("Volatility 100 Index Breaker Alert");
+      setHqSignalType("Derivative Digit Contract");
+      setHqDescription("High-speed digit patterns scanning under digit 7 with multi-barrier resistance breakout confirmation.");
+      setHqPriority("High");
+
+      setHqLeadTrigger("Tick oscillation patterns print consecutive digits above 8 for 4 ticks, triggering standby condition.");
+      setHqLeadAddInfo("Prepare binary account balance and confirm bot server ping is under 40ms.");
+      setHqLeadChannels("Telegram VIP Feed");
+      setHqLeadRecipients("@zeta_vip_members, #volatility-feed");
+
+      setHqCurrentTrigger("Active Setup Triggered: Digit 9 prints on last tick. Contract UNDER 7 active.");
+      setHqCurrentAddInfo("Martingale multiplier v2 activated. Maximum target depth set to 3 recovery steps.");
+      setHqCurrentChannels("Telegram Main Channel");
+      setHqCurrentRecipients("@mrzetuzetu_signals, #members-dashboard");
+
+      setHqGoingTrigger("Final session cooldown alert and performance metrics overview.");
+      setHqGoingAddInfo("Total gain for sequence block is stable. Standby for next system scan cycle.");
+      setHqGoingSendTime("2026-06-07T14:30");
+      setHqGoingChannels("Telegram Main Channel, Discord Feed");
+      setHqGoingRecipients("@mrzetuzetu_signals, #cooldown_tracker");
+
+      setHqTags("deriv, volatility100, second_least_digit, zeta");
+      setHqNotes("Always monitor the base index on Deriv SmartTrader before starting the automatic bot loop.");
+
+      // Also clean storage immediately
+      localStorage.removeItem("hq_signal_name");
+      localStorage.removeItem("hq_signal_type");
+      localStorage.removeItem("hq_description");
+      localStorage.removeItem("hq_priority");
+      localStorage.removeItem("hq_lead_trigger");
+      localStorage.removeItem("hq_lead_add_info");
+      localStorage.removeItem("hq_lead_channels");
+      localStorage.removeItem("hq_lead_recipients");
+      localStorage.removeItem("hq_current_trigger");
+      localStorage.removeItem("hq_current_add_info");
+      localStorage.removeItem("hq_current_channels");
+      localStorage.removeItem("hq_current_recipients");
+      localStorage.removeItem("hq_going_trigger");
+      localStorage.removeItem("hq_going_add_info");
+      localStorage.removeItem("hq_going_send_time");
+      localStorage.removeItem("hq_going_channels");
+      localStorage.removeItem("hq_going_recipients");
+      localStorage.removeItem("hq_tags");
+      localStorage.removeItem("hq_notes");
+
+      setSaveSuccessMessage("Draft settings successfully restored to base guides.");
+      setTimeout(() => setSaveSuccessMessage(""), 3000);
+    }
+  };
+
+  const handleOpenSaveTemplate = () => {
+    if (formMode === "deriv") {
+      setSaveTemplateName(`${derivSymbol.replace(" INDEX", "")} ${derivAction} [Digit ${derivEntryDigit}]`);
+    } else {
+      setSaveTemplateName(`${symbol} ${action} Setup`);
+    }
+    setSaveTemplateFeedback("");
+    setShowSaveTemplateForm(true);
+  };
+
+  const handleConfirmSaveTemplate = () => {
+    if (!saveTemplateName.trim()) {
+      setSaveTemplateFeedback("Please enter a valid blueprint name.");
+      return;
+    }
+
+    try {
+      const STORAGE_KEY_BLUEPRINTS = "broadcaster_blueprints";
+      const savedStr = localStorage.getItem(STORAGE_KEY_BLUEPRINTS);
+      let list = [];
+      if (savedStr) {
+        try {
+          list = JSON.parse(savedStr);
+        } catch (e) {
+          list = [];
+        }
+      }
+
+      const newBlueprint = {
+        id: "blueprint_" + Date.now(),
+        name: saveTemplateName.trim(),
+        type: formMode === "deriv" ? "Derivative Digit Contract" : (assetClass === "Crypto" ? "Crypto Breakout Pair" : (assetClass === "Synthetic" ? "Synthetic Index Spot" : "Forex Major Pair")),
+        symbol: (formMode === "deriv" ? derivSymbol : symbol).trim().toUpperCase(),
+        action: (formMode === "deriv" ? derivAction : action).trim().toUpperCase(),
+        strategy: formMode === "deriv" ? derivStrategy : `Risk Model: ${sentiment}`,
+        notes: (formMode === "deriv" ? derivRiskManagement : userNotes) || "Sourced from custom Signal Builder draft."
+      };
+
+      list = [newBlueprint, ...list];
+      localStorage.setItem(STORAGE_KEY_BLUEPRINTS, JSON.stringify(list));
+
+      setSaveTemplateFeedback("Blueprint saved successfully! Check 'Blueprints & Templates' tab. 💾");
+      setTimeout(() => {
+        setShowSaveTemplateForm(false);
+      }, 2500);
+    } catch (err) {
+      setSaveTemplateFeedback("Error saving blueprint.");
+    }
+  };
+
+  const handleRecompileSequence = () => {
+    setSeqPreSignal(
+      `🚨 <b>STANDBY ALERT TO MEMBERS</b> 🚨\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `⏳ <b>Preparing</b> an upcoming trade setup on <b>${seqSymbol.toUpperCase()}</b>.\n` +
+      `📢 <b>Bot Settings:</b> ${seqStrategy}\n` +
+      `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>\n\n` +
+      `🖥️ https://www.mrzetuzetu.site`
+    );
+    setSeqActiveSignal(
+      `🔔 <b>ACTIVE TRADING SETUP BROADCAST</b> 🔔\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `📈 <b>Asset:</b> ${seqSymbol.toUpperCase()}\n` +
+      `📊 <b>Contract:</b> ${seqAction.toUpperCase()}\n` +
+      `⚡ <b>Strategy:</b> ${seqStrategy}\n\n` +
+      `🎯 Entry trigger active! Execute with correct risk models.\n` +
+      `🖥️ https://www.mrzetuzetu.site`
+    );
+    setSeqPostSignal(
+      `⌛ <b>COOLDOWN & NEXT READY</b> ⌛\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `✅ Previous alert sequence for <b>${seqSymbol.toUpperCase()}</b> is finalized!\n` +
+      `📡 <i>Entering temporary cooldown. Relax and prepare.</i>\n\n` +
+      `🔔 <b>Stay tuned!</b> We are already scanning for the next alert signal opportunity.`
+    );
+  };
+
+  const handleTransmitDirect = async (text: string, type: "pre" | "active" | "post") => {
+    if (!onPostDirectTelegram) {
+      setSeqError("Direct Telegram poster is not currently configured by App dashboard.");
+      return;
+    }
+    
+    setSeqError("");
+    if (type === "pre") setTransPreStatus("sending");
+    else if (type === "active") setTransActiveStatus("sending");
+    else setTransPostStatus("sending");
+
+    try {
+      const res = await onPostDirectTelegram(text);
+      if (res.success) {
+        if (type === "pre") {
+          setTransPreStatus("success");
+          setTimeout(() => setTransPreStatus("idle"), 3000);
+        } else if (type === "active") {
+          setTransActiveStatus("success");
+          setTimeout(() => setTransActiveStatus("idle"), 3000);
+        } else {
+          setTransPostStatus("success");
+          setTimeout(() => setTransPostStatus("idle"), 3000);
+        }
+      } else {
+        throw new Error(res.error || "Failed raw dispatch connection request.");
+      }
+    } catch (e: any) {
+      setSeqError(e.message || "Failed to broadcast signal to Telegram.");
+      if (type === "pre") setTransPreStatus("error");
+      else if (type === "active") setTransActiveStatus("error");
+      else setTransPostStatus("error");
+    }
+  };
+
+  const handleLoadAsDraft = (text: string, type: "pre" | "active" | "post") => {
+    let titleType = type === "pre" ? "Prep Alert" : type === "active" ? "Active Alert" : "Next Alert";
+    onSignalGenerated({
+      assetClass: "Sequence Alert",
+      symbol: seqSymbol,
+      action: seqAction,
+      entry: "Sequence " + titleType,
+      tp1: "",
+      tp2: "",
+      tp3: "",
+      sl: "",
+      formattedText: text,
+      rationale: `Sequence alert component loaded from sequencer tab: [${titleType}] on ${seqSymbol}.`,
+    }, true /* skipAutoBroadcast = true is critical here so they can review/edit before casting! */);
+  };
 
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState("");
@@ -336,7 +894,7 @@ export default function TradingSignalForm({
       </div>
 
       {/* Signal Type Selector (Tabs) */}
-      <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 border border-slate-850 rounded-xl" id="profile-selector-tabs">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-slate-950 p-1.5 border border-slate-850 rounded-xl" id="profile-selector-tabs">
         <button
           type="button"
           onClick={() => {
@@ -353,7 +911,7 @@ export default function TradingSignalForm({
           id="btn-choose-deriv-mode"
         >
           <Laptop className="w-3.5 h-3.5" />
-          <span>Deriv Synthetic (Digits Bot Style)</span>
+          <span>Deriv Synthetic (Digits)</span>
         </button>
 
         <button
@@ -369,7 +927,23 @@ export default function TradingSignalForm({
           id="btn-choose-classic-mode"
         >
           <Landmark className="w-3.5 h-3.5" />
-          <span>Forex & Crypto (Standard MT4 Style)</span>
+          <span>Forex & Crypto (MT4)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setFormMode("sequence");
+          }}
+          className={`py-2 px-3 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            formMode === "sequence"
+              ? "bg-emerald-950 text-emerald-300 border border-emerald-900/40 shadow shadow-emerald-950/20"
+              : "text-slate-400 hover:text-slate-200"
+          }`}
+          id="btn-choose-sequence-mode"
+        >
+          <Radio className="w-3.5 h-3.5 text-emerald-450 animate-pulse" />
+          <span>Alert Sequences (Option 3)</span>
         </button>
       </div>
 
@@ -540,7 +1114,6 @@ export default function TradingSignalForm({
                   id="deriv-signature-input"
                 />
               </div>
-              
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-slate-300">Social Channel Hashtags</label>
                 <input
@@ -548,14 +1121,14 @@ export default function TradingSignalForm({
                   value={derivHashtags}
                   onChange={(e) => setDerivHashtags(e.target.value)}
                   placeholder="#TradingSignal #Deriv #OverUnder"
-                  className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-400 placeholder-slate-650 outline-none font-mono"
+                  className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-405 placeholder-slate-650 outline-none font-mono"
                   id="deriv-hashtags-input"
                 />
               </div>
             </div>
 
           </div>
-        ) : (
+        ) : formMode === "classic" ? (
           /* CLASSIC FOREX / CRYPTO FORM FIELDS */
           <div className="space-y-4 animate-fade-in" id="classic-form-fields">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -646,34 +1219,34 @@ export default function TradingSignalForm({
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase font-semibold text-slate-500 font-sans">Take Profit 1</label>
                   <input
-                    type="text"
-                    value={tp1}
-                    onChange={(e) => setTp1(e.target.value)}
-                    placeholder="Target TP 1"
-                    className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-emerald-400 placeholder-slate-600 font-mono text-center outline-none"
-                    id="input-tp1"
+                     type="text"
+                     value={tp1}
+                     onChange={(e) => setTp1(e.target.value)}
+                     placeholder="Target TP 1"
+                     className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-emerald-400 placeholder-slate-650 font-mono text-center outline-none"
+                     id="input-tp1"
                   />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase font-semibold text-slate-500 font-sans">Take Profit 2 (Optional)</label>
                   <input
-                    type="text"
-                    value={tp2}
-                    onChange={(e) => setTp2(e.target.value)}
-                    placeholder="Target TP 2"
-                    className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-emerald-400 placeholder-slate-600 font-mono text-center outline-none"
-                    id="input-tp2"
+                     type="text"
+                     value={tp2}
+                     onChange={(e) => setTp2(e.target.value)}
+                     placeholder="Target TP 2"
+                     className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-emerald-400 placeholder-slate-650 font-mono text-center outline-none"
+                     id="input-tp2"
                   />
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] uppercase font-semibold text-slate-500 font-sans">Take Profit 3 (Optional)</label>
                   <input
-                    type="text"
-                    value={tp3}
-                    onChange={(e) => setTp3(e.target.value)}
-                    placeholder="Target TP 3"
-                    className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-emerald-400 placeholder-slate-600 font-mono text-center outline-none"
-                    id="input-tp3"
+                     type="text"
+                     value={tp3}
+                     onChange={(e) => setTp3(e.target.value)}
+                     placeholder="Target TP 3"
+                     className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-emerald-400 placeholder-slate-650 font-mono text-center outline-none"
+                     id="input-tp3"
                   />
                 </div>
               </div>
@@ -706,9 +1279,498 @@ export default function TradingSignalForm({
               </div>
             </div>
           </div>
+        ) : (
+          /* SEQUENCE ALERTS MODE (OPTION 3) - DRAFT SIGNAL & ALERTS HIGH FIDELITY WIZARD */
+          <div className="space-y-6 animate-fade-in text-sans" id="sequence-form-fields">
+            
+            {/* Breadcrumb & Screen Headers */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-850 pb-4">
+              <div className="space-y-1">
+                <nav className="text-[10px] font-semibold text-slate-500 flex items-center gap-1 uppercase tracking-wider font-mono">
+                  <span>Signals</span>
+                  <span>/</span>
+                  <span className="text-sky-400">Draft Signal</span>
+                </nav>
+                <h3 className="text-base font-bold text-white tracking-tight flex items-center gap-1.5">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
+                  </span>
+                  <span>Draft Signal & Alerts</span>
+                </h3>
+              </div>
+
+              {/* Action Buttons to Cancel & Save */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelHqDraft}
+                  className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-850 hover:text-white border border-slate-800 text-slate-400 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5"
+                  id="btn-hq-cancel-draft"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Cancel</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveHqDraft}
+                  className="px-4 py-1.5 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white text-xs font-semibold rounded-lg shadow-md shadow-sky-500/10 hover:shadow-sky-500/20 transition-all cursor-pointer flex items-center gap-1.5"
+                  id="btn-hq-save-draft"
+                >
+                  <Save className="w-3.5 h-3.5 text-sky-100" />
+                  <span>Save Draft</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Success flash notifications */}
+            {saveSuccessMessage && (
+              <div className="bg-emerald-950/40 text-emerald-300 border border-emerald-900/50 rounded-xl p-3.5 text-xs flex items-center gap-2.5 animate-bounce-short" id="save-success-banner">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-semibold">{saveSuccessMessage}</span>
+              </div>
+            )}
+
+            {/* 1. Signal Information Card */}
+            <div className="bg-slate-950 p-5 border border-slate-850 rounded-xl space-y-4">
+              <div className="flex items-center gap-2 border-b border-slate-900 pb-2.5">
+                <FileText className="w-4 h-4 text-sky-400 font-bold" />
+                <span className="text-xs font-semibold text-slate-200">1. Signal General Information</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-slate-350 flex items-center gap-1">
+                    <span>Signal Name</span>
+                    <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={hqSignalName}
+                    onChange={(e) => setHqSignalName(e.target.value)}
+                    placeholder="e.g. Volatility 100 Index Breaker Alert"
+                    className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 focus:bg-slate-900/80 rounded-lg text-slate-100 placeholder-slate-650 outline-none"
+                    id="hq-signal-name"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-slate-350 flex items-center gap-1">
+                    <span>Signal Type</span>
+                    <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <select
+                    value={hqSignalType}
+                    onChange={(e) => setHqSignalType(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 focus:bg-slate-900/80 rounded-lg text-slate-300 focus:text-white outline-none cursor-pointer"
+                    id="hq-signal-type"
+                  >
+                    <option value="Derivative Digit Contract">Derivative Digit Contract</option>
+                    <option value="Forex Major Pair">Forex Major Pair</option>
+                    <option value="Crypto Breakout Pair">Crypto Breakout Pair</option>
+                    <option value="Synthetic Index Spot">Synthetic Index Spot</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4 pt-1">
+                <div className="space-y-1.5 md:col-span-9">
+                  <label className="text-xs font-medium text-slate-355 flex items-center gap-1">
+                    <span>Description Details</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={hqDescription}
+                    onChange={(e) => setHqDescription(e.target.value)}
+                    placeholder="Describe session expectations, key index support lines, and risk factors..."
+                    className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 focus:bg-slate-900/80 rounded-lg text-slate-200 placeholder-slate-650 outline-none resize-none leading-relaxed"
+                    id="hq-description"
+                  />
+                </div>
+
+                <div className="space-y-1.5 md:col-span-3">
+                  <label className="text-xs font-medium text-slate-355 flex items-center gap-1">
+                    <span>Priority Level</span>
+                    <span className="text-rose-500 font-bold">*</span>
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={hqPriority}
+                      onChange={(e) => setHqPriority(e.target.value)}
+                      className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 focus:bg-slate-900/80 rounded-lg text-slate-300 focus:text-white outline-none cursor-pointer appearance-none"
+                      id="hq-priority"
+                    >
+                      <option value="High">⚠️ High Priority</option>
+                      <option value="Medium">⚡ Medium Priority</option>
+                      <option value="Low">🌱 Low Priority</option>
+                    </select>
+                    <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400">
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 3-Column Bento Grid of Alerts/Activities */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+              
+              {/* Column 1: Lead Alert (Early Warning) */}
+              <div className="bg-slate-950/80 border border-emerald-900/30 rounded-xl p-4.5 space-y-4 hover:border-emerald-900/60 transition-all flex flex-col justify-between">
+                <div className="space-y-3.5">
+                  <div className="flex items-start gap-2.5 border-b border-slate-900 pb-3">
+                    <div className="p-2 bg-emerald-950/50 border border-emerald-900/40 rounded-lg text-emerald-400 shrink-0">
+                      <Bell className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-200">Lead Alert (Early Warning)</h4>
+                      <p className="text-[10px] text-slate-450 leading-tight">Early warning indicators and preparatory signals</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 font-sans">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Trigger Condition</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={hqLeadTrigger}
+                        onChange={(e) => setHqLeadTrigger(e.target.value)}
+                        placeholder="Condition criteria..."
+                        className="w-full p-2.5 text-xs bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-lg text-slate-200 placeholder-slate-650 outline-none font-mono resize-none leading-relaxed"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Additional Information</label>
+                      <input
+                        type="text"
+                        value={hqLeadAddInfo}
+                        onChange={(e) => setHqLeadAddInfo(e.target.value)}
+                        placeholder="e.g. Server response check"
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-lg text-slate-250 placeholder-slate-650 outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Notification Channels</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={hqLeadChannels}
+                        onChange={(e) => setHqLeadChannels(e.target.value)}
+                        placeholder="Channels list..."
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-lg text-slate-250 placeholder-slate-650 outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Recipients</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={hqLeadRecipients}
+                        onChange={(e) => setHqLeadRecipients(e.target.value)}
+                        placeholder="Subscribers handles..."
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-lg text-slate-200 placeholder-slate-650 outline-none font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-900/85 mt-2 flex flex-col gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const compiled = 
+                        `🚨 <b>LEAD EARLY WARNING: ${hqSignalName}</b> 🚨\n` +
+                        `• <b>Setup Trigger:</b> ${hqLeadTrigger}\n` +
+                        `• <b>Priority:</b> ${hqPriority}\n` +
+                        `• <b>Guidance:</b> ${hqLeadAddInfo}\n` +
+                        `• <b>Target Pool:</b> ${hqLeadRecipients}\n\n` +
+                        `📢 Standby on channels [${hqLeadChannels}]!`;
+                      handleTransmitDirect(compiled, "pre");
+                    }}
+                    disabled={transPreStatus === "sending"}
+                    className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-lg transition-all disabled:opacity-40 cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-350 fill-amber-350/10" />
+                    <span>
+                      {transPreStatus === "sending" ? "Sending... ⏳" : transPreStatus === "success" ? "Sent Successfully! 🟢" : "Transmit Lead Setup ⚡"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Column 2: Current Signal */}
+              <div className="bg-slate-950/80 border border-sky-900/30 rounded-xl p-4.5 space-y-4 hover:border-sky-900/60 transition-all flex flex-col justify-between">
+                <div className="space-y-3.5">
+                  <div className="flex items-start gap-2.5 border-b border-slate-900 pb-3">
+                    <div className="p-2 bg-sky-950/50 border border-sky-900/40 rounded-lg text-sky-450 shrink-0">
+                      <Radio className="w-4 h-4 animate-pulse" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-200">Current Signal</h4>
+                      <p className="text-[10px] text-slate-450 leading-tight">Live alert for active real-time setup triggers</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 font-sans">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Trigger Condition</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={hqCurrentTrigger}
+                        onChange={(e) => setHqCurrentTrigger(e.target.value)}
+                        placeholder="e.g. UNDER 7 active contract limits"
+                        className="w-full p-2.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-slate-200 placeholder-slate-650 outline-none font-mono resize-none leading-relaxed"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Additional Information</label>
+                      <input
+                        type="text"
+                        value={hqCurrentAddInfo}
+                        onChange={(e) => setHqCurrentAddInfo(e.target.value)}
+                        placeholder="e.g. Martingale steps v2 activated"
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-slate-250 placeholder-slate-650 outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Notification Channels</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={hqCurrentChannels}
+                        onChange={(e) => setHqCurrentChannels(e.target.value)}
+                        placeholder="Telegram Channels..."
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-slate-250 placeholder-slate-650 outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Recipients</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={hqCurrentRecipients}
+                        onChange={(e) => setHqCurrentRecipients(e.target.value)}
+                        placeholder="Target feed lists..."
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-slate-200 placeholder-slate-650 outline-none font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-900/85 mt-2 flex flex-col gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const compiled = 
+                        `🔔 <b>ACTIVE PLAY TRIGGERED: ${hqSignalName}</b> 🔔\n` +
+                        `• <b>Setup Status:</b> ${hqCurrentTrigger}\n` +
+                        `• <b>Active Parameters:</b> UNDER 7 Contract\n` +
+                        `• <b>Action Rate:</b> ${hqCurrentAddInfo}\n` +
+                        `• <b>Members Feed:</b> ${hqCurrentRecipients}\n\n` +
+                        `📈 <i>Execute with strict trade risk control metrics!</i>`;
+                      handleTransmitDirect(compiled, "active");
+                    }}
+                    disabled={transActiveStatus === "sending"}
+                    className="w-full py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-[10px] font-bold rounded-lg transition-all disabled:opacity-40 cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-350 fill-amber-350/10" />
+                    <span>
+                      {transActiveStatus === "sending" ? "Transmitting... ⏳" : transActiveStatus === "success" ? "Transmitted! 🟢" : "Transmit Live Setup ⚡"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Column 3: Alert (Going to be Sent) */}
+              <div className="bg-slate-950/80 border border-amber-900/30 rounded-xl p-4.5 space-y-4 hover:border-amber-900/60 transition-all flex flex-col justify-between">
+                <div className="space-y-3.5">
+                  <div className="flex items-start gap-2.5 border-b border-slate-900 pb-3">
+                    <div className="p-2 bg-amber-950/40 border border-amber-900/45 rounded-lg text-amber-400 shrink-0">
+                      <Navigation className="w-4 h-4 rotate-45" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-200">Alert (Going to be Sent)</h4>
+                      <p className="text-[10px] text-slate-450 leading-tight">Cooldown release status and scheduled dispatch alerts</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 font-sans">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Trigger Condition</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={hqGoingTrigger}
+                        onChange={(e) => setHqGoingTrigger(e.target.value)}
+                        placeholder="Final session wrapup..."
+                        className="w-full p-2.5 text-xs bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg text-slate-200 placeholder-slate-650 outline-none font-mono resize-none leading-relaxed"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Additional Information </label>
+                      <input
+                        type="text"
+                        value={hqGoingAddInfo}
+                        onChange={(e) => setHqGoingAddInfo(e.target.value)}
+                        placeholder="e.g. Session gains secured"
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg text-slate-250 placeholder-slate-650 outline-none"
+                      />
+                    </div>
+
+                    {/* Rich date time picker with custom symbol style */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-450 uppercase tracking-wider flex items-center gap-1">
+                        <Calendar className="w-3 h-3 text-amber-500" />
+                        <span>Send Alert Scheduling</span>
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={hqGoingSendTime}
+                        onChange={(e) => setHqGoingSendTime(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg text-amber-400 outline-none cursor-pointer font-mono"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Notification Channels</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={hqGoingChannels}
+                        onChange={(e) => setHqGoingChannels(e.target.value)}
+                        placeholder="Release channel lists"
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg text-slate-250 placeholder-slate-650 outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Recipients</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={hqGoingRecipients}
+                        onChange={(e) => setHqGoingRecipients(e.target.value)}
+                        placeholder="@members-telegram..."
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg text-slate-200 placeholder-slate-650 outline-none font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-slate-900/85 mt-2 flex flex-col gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const compiled = 
+                        `⌛ <b>COOLDOWN NOTICE: Next Alert Setup</b> ⌛\n` +
+                        `• <b>Final Setup Event:</b> ${hqGoingTrigger}\n` +
+                        `• <b>Performance status:</b> ${hqGoingAddInfo}\n` +
+                        `• <b>Expected release:</b> ${hqGoingSendTime} UTC (Coordinated Time)\n\n` +
+                        `📡 <i>We are preparing the next automatic loop setup. Stay alert!</i>`;
+                      handleTransmitDirect(compiled, "post");
+                    }}
+                    disabled={transPostStatus === "sending"}
+                    className="w-full py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded-lg transition-all disabled:opacity-40 cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-300 fill-amber-300/10" />
+                    <span>
+                      {transPostStatus === "sending" ? "Transmitting... ⏳" : transPostStatus === "success" ? "Transmitted! 🟢" : "Transmit Cooldown Setup ⚡"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            {/* General Settings Card */}
+            <div className="bg-slate-950 p-5 border border-slate-850 rounded-xl space-y-4">
+              <div className="flex items-center gap-2 border-b border-slate-900 pb-2.5">
+                <HelpCircle className="w-4 h-4 text-sky-450" />
+                <span className="text-xs font-semibold text-slate-200">General Settings & Metadata Indicators (Optional)</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-slate-350">Sequence Tags</label>
+                  <input
+                    type="text"
+                    value={hqTags}
+                    onChange={(e) => setHqTags(e.target.value)}
+                    placeholder="e.g. deriv, volatility100, second_least_digit"
+                    className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-slate-100 placeholder-slate-650 font-mono outline-none"
+                    id="hq-tags"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-slate-350">Operator Sequence Notes</label>
+                  <textarea
+                    rows={1}
+                    value={hqNotes}
+                    onChange={(e) => setHqNotes(e.target.value)}
+                    placeholder="Internal reference pointers for session operations..."
+                    className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-slate-200 placeholder-slate-650 outline-none resize-none leading-relaxed"
+                    id="hq-notes"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Sizable Footer Synchronize & Save Blueprint controller */}
+            <div className="p-4 bg-slate-950 rounded-xl border border-slate-900/90 flex flex-col sm:flex-row items-center justify-between gap-4 font-sans">
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <span className="w-2 h-2 rounded-full bg-sky-500 animate-pulse"></span>
+                <span>Active configuration drafted above automatically saves to cache & updates the simulated Telegram window when saved.</span>
+              </div>
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={handleCancelHqDraft}
+                  className="flex-1 sm:flex-initial px-4 py-2 text-xs font-bold text-slate-400 hover:text-white bg-slate-900 border border-slate-800 rounded-lg hover:border-slate-700 transition-all cursor-pointer"
+                >
+                  Restore Baseline
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveHqDraft}
+                  className="flex-1 sm:flex-initial px-5 py-2 text-xs font-bold bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white rounded-lg shadow-lg shadow-sky-500/10 cursor-pointer duration-150 transform active:translate-y-px"
+                >
+                  Compile & Save Draft
+                </button>
+              </div>
+            </div>
+
+          </div>
         )}
 
-        {genError && (
+        {genError && formMode !== "sequence" && (
           <div className="bg-rose-950/30 text-rose-300 border border-rose-900/50 rounded-xl p-3 text-xs flex items-center gap-2" id="builder-error-div">
             <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
             <span>{genError}</span>
@@ -716,83 +1778,149 @@ export default function TradingSignalForm({
         )}
 
         {/* Telegram Auto-Share Dispatcher Options */}
-        <div className="bg-slate-950 p-4 border border-slate-850/60 rounded-xl space-y-2.5" id="auto-broadcast-manual-config">
-          <div className="flex justify-between items-center text-xs">
-            <span className="text-slate-300 font-medium font-sans">Telegram Share Dispatch Mode</span>
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border font-mono ${
-              autoShareEnabled 
-                ? "bg-emerald-950/40 text-emerald-300 border-emerald-900/40" 
-                : "bg-slate-900 text-slate-500 border-slate-800"
-            }`}>
-              {autoShareEnabled ? "INSTANT DISPATCH ON BUILD" : "MANUAL REVIEW POSTS"}
-            </span>
+        {formMode !== "sequence" && (
+          <div className="bg-slate-950 p-4 border border-slate-850/60 rounded-xl space-y-2.5" id="auto-broadcast-manual-config">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-300 font-medium font-sans">Telegram Share Dispatch Mode</span>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded border font-mono ${
+                autoShareEnabled 
+                  ? "bg-emerald-950/40 text-emerald-300 border-emerald-900/40" 
+                  : "bg-slate-900 text-slate-500 border-slate-800"
+              }`}>
+                {autoShareEnabled ? "INSTANT DISPATCH ON BUILD" : "MANUAL REVIEW POSTS"}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-snug">
+              Send formulated trading setups automatically to channel <code>{telegramConfigChatId || "Telegram"}</code> as soon as you compile or AI-drafts them.
+            </p>
+            
+            <div className="grid grid-cols-2 gap-2 pt-0.5 font-sans">
+              <button
+                type="button"
+                onClick={() => onAutoShareToggle(false)}
+                className={`py-1.5 px-3 text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                  !autoShareEnabled
+                    ? "bg-slate-800 text-white border border-slate-700/60"
+                    : "bg-slate-900/50 text-slate-450 border border-slate-850/60 hover:bg-slate-800/30"
+                }`}
+                id="btn-manual-review-only"
+              >
+                Draft & Manual Review
+              </button>
+              <button
+                type="button"
+                onClick={() => onAutoShareToggle(true)}
+                className={`py-1.5 px-3 text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                  autoShareEnabled
+                    ? "bg-emerald-950/60 text-emerald-300 border border-emerald-900/40"
+                    : "bg-slate-900/50 text-slate-455 border border-slate-850/60 hover:bg-slate-800/30"
+                }`}
+                id="btn-auto-share-instantly"
+              >
+                Auto-Share Instantly ⚡
+              </button>
+            </div>
           </div>
-          <p className="text-[10px] text-slate-500 leading-snug">
-            Send formulated trading setups automatically to channel <code>{telegramConfigChatId || "Telegram"}</code> as soon as you compile or AI-drafts them.
-          </p>
-          
-          <div className="grid grid-cols-2 gap-2 pt-0.5 font-sans">
-            <button
-              type="button"
-              onClick={() => onAutoShareToggle(false)}
-              className={`py-1.5 px-3 text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center ${
-                !autoShareEnabled
-                  ? "bg-slate-800 text-white border border-slate-700/60"
-                  : "bg-slate-900/50 text-slate-450 border border-slate-850/60 hover:bg-slate-800/30"
-              }`}
-              id="btn-manual-review-only"
-            >
-              Draft & Manual Review
-            </button>
-            <button
-              type="button"
-              onClick={() => onAutoShareToggle(true)}
-              className={`py-1.5 px-3 text-[10px] font-bold rounded-lg transition-all cursor-pointer text-center ${
-                autoShareEnabled
-                  ? "bg-emerald-950/60 text-emerald-300 border border-emerald-900/40"
-                  : "bg-slate-900/50 text-slate-455 border border-slate-850/60 hover:bg-slate-800/30"
-              }`}
-              id="btn-auto-share-instantly"
-            >
-              Auto-Share Instantly ⚡
-            </button>
+        )}
+
+        {/* Inline save blueprint/template input block */}
+        {showSaveTemplateForm && formMode !== "sequence" && (
+          <div className="bg-slate-950 p-4 border border-sky-905/30 rounded-xl space-y-3.5 animate-fade-in" id="save-template-inline-card">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
+              <Save className="w-4 h-4 text-sky-400" />
+              <span>Save Current Setup as Template Blueprint</span>
+            </div>
+            <p className="text-[10px] text-slate-400 leading-normal">
+              Save the current symbol, strategy, and options to your local template blueprints so they can be loaded instantly in the future from the <b>"Blueprints & Templates"</b> tab.
+            </p>
+            
+            <div className="space-y-1.5 font-sans">
+              <label className="text-[10px] uppercase font-bold text-slate-500 block">Blueprint Name</label>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <input
+                  type="text"
+                  value={saveTemplateName}
+                  onChange={(e) => setSaveTemplateName(e.target.value)}
+                  placeholder="e.g. Volatility 100 System"
+                  className="flex-1 px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-lg text-white placeholder-slate-650 outline-none"
+                  id="input-inline-save-template-name"
+                />
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleConfirmSaveTemplate}
+                    className="px-4 py-2 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-450 hover:to-indigo-550 text-white text-xs font-bold rounded-lg transition-all cursor-pointer shadow"
+                    id="btn-inline-save-template-confirm"
+                  >
+                    Confirm Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSaveTemplateForm(false)}
+                    className="px-3.5 py-2 bg-slate-900 hover:bg-slate-850 hover:text-white border border-slate-800 text-slate-400 text-xs font-bold rounded-lg transition-all cursor-pointer"
+                    id="btn-inline-save-template-cancel"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {saveTemplateFeedback && (
+              <p className="text-[10.5px] text-teal-400 font-semibold font-sans mt-1">
+                {saveTemplateFeedback}
+              </p>
+            )}
           </div>
-        </div>
+        )}
 
         {/* Action controllers */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-3 border-t border-slate-800/60 font-sans">
-          <button
-            type="submit"
-            disabled={generating}
-            className="flex-1 bg-gradient-to-r from-sky-500 via-sky-600 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-white font-semibold text-xs py-3 px-5 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-sky-500/10 cursor-pointer disabled:cursor-not-allowed transform hover:-translate-y-px active:translate-y-0 transition-all font-sans"
-            id="btn-gemini-draft-signal"
-          >
-            {generating ? (
-              <>
-                <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <span>AI is formulating signal message...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 text-amber-300 fill-amber-300/20" />
-                <span>AI Assist: Draft Signal & Rationale</span>
-              </>
-            )}
-          </button>
+        {formMode !== "sequence" && (
+          <div className="flex flex-col xl:flex-row items-stretch xl:items-center gap-3 pt-3 border-t border-slate-800/60 font-sans">
+            <button
+              type="submit"
+              disabled={generating}
+              className="flex-1 bg-gradient-to-r from-sky-500 via-sky-600 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-white font-semibold text-xs py-3 px-5 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-sky-500/10 cursor-pointer disabled:cursor-not-allowed transform hover:-translate-y-px active:translate-y-0 transition-all font-sans"
+              id="btn-gemini-draft-signal"
+            >
+              {generating ? (
+                <>
+                  <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  <span>AI is formulating signal message...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 text-amber-300 fill-amber-300/20" />
+                  <span>AI Assist: Draft Signal & Rationale</span>
+                </>
+              )}
+            </button>
 
-          <button
-            type="button"
-            onClick={handleManualFormat}
-            disabled={generating}
-            className="px-5 py-3 text-xs border border-slate-850 hover:bg-slate-800/50 disabled:border-slate-850/45 disabled:text-slate-650 disabled:hover:bg-transparent text-slate-300 hover:text-white rounded-xl transition-all cursor-pointer font-sans"
-            id="btn-manual-format-signal"
-          >
-            Compiler Mode (Format Instantly)
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={handleManualFormat}
+              disabled={generating}
+              className="px-4 py-3 text-xs border border-slate-850 hover:bg-slate-800/50 disabled:border-slate-850/45 disabled:text-slate-650 disabled:hover:bg-transparent text-slate-350 hover:text-white rounded-xl transition-all cursor-pointer font-sans"
+              id="btn-manual-format-signal"
+            >
+              Compiler Mode (Format Instantly)
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenSaveTemplate}
+              disabled={generating}
+              className="px-4 py-3 text-xs bg-slate-950 border border-slate-800 hover:border-slate-700 hover:text-white hover:bg-slate-900 text-sky-400 rounded-xl transition-all cursor-pointer font-sans flex items-center justify-center gap-1.5"
+              id="btn-save-draft-as-blueprint"
+            >
+              <Save className="w-3.5 h-3.5 text-sky-400" />
+              <span>Save as Blueprint Template 💾</span>
+            </button>
+          </div>
+        )}
       </form>
     </div>
   );

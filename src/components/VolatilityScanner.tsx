@@ -270,6 +270,9 @@ export default function VolatilityScanner({
 
   // Helper to format interval durations nicely
   const formatCadenceValue = (mins: number) => {
+    if (mins < 1) {
+      return `${Math.round(mins * 60)} seconds`;
+    }
     if (mins < 60) {
       return mins % 1 === 0 ? `${mins} minutes` : `${Math.floor(mins)} min 30s`;
     }
@@ -301,6 +304,8 @@ export default function VolatilityScanner({
     "⚙️ Auto-broadcast is enabled. Outgoing signals will post live to Telegram and trace expiry sequences."
   ]);
   const [generatingSignal, setGeneratingSignal] = useState(false);
+  const generatingSignalRef = useRef(generatingSignal);
+  useEffect(() => { generatingSignalRef.current = generatingSignal; }, [generatingSignal]);
 
   // Keep references to prevent async closure state mismatches
   const isRunningRef = useRef(isRunning);
@@ -598,17 +603,14 @@ export default function VolatilityScanner({
   useEffect(() => {
     if (broadcastFrequency !== "hourly") return;
     
+    // The user explicitly requested that after sharing signals, it expires after 5 minutes (300 seconds).
+    // Therefore, we keep signal duration strictly at 300 seconds.
+    setActiveSignalDuration(300);
+    
     const intervalSeconds = hourlyIntervalMinutes * 60;
-    
-    // Allocate 75% for active trade tracking, 15% for cooldown hold
-    const activeSecs = Math.floor(intervalSeconds * 0.75);
     const cooldownSecs = Math.floor(intervalSeconds * 0.15);
-    
-    // Clamp to minimum logical baselines
-    const finalActive = Math.max(15, activeSecs);
     const finalCooldown = Math.max(10, cooldownSecs);
     
-    setActiveSignalDuration(finalActive);
     setCooldownDuration(finalCooldown);
   }, [hourlyIntervalMinutes, broadcastFrequency]);
 
@@ -623,17 +625,25 @@ export default function VolatilityScanner({
           if (prev <= 1) {
             // Time's up! Trigger signal dispatch
             setTimeout(() => {
-              // Select strongest market dynamically
-              const sorted = [...marketsRef.current].sort((a, b) => b.strength - a.strength);
-              const topMarket = sorted[0] || INITIAL_MARKETS[4];
-              
-              setAutoLog((prevLogs) => [
-                `⏰ [HOURLY DISPATCH CYCLE] Hourly countdown completed! Auto-broadcasting top setup to Telegram (Interval: ${formatCadenceValue(hourlyIntervalMinutesRef.current)})...`,
-                `🏆 Dynamic asset: ${topMarket.name}`,
-                ...prevLogs.slice(0, 48)
-              ]);
-              
-              handleTriggerDetection(topMarket);
+              // Ensure we ONLY dispatch if the scanner is in SCANNING state and not currently generating
+              if (scannerStateRef.current === "SCANNING" && !generatingSignalRef.current) {
+                // Select strongest market dynamically
+                const sorted = [...marketsRef.current].sort((a, b) => b.strength - a.strength);
+                const topMarket = sorted[0] || INITIAL_MARKETS[4];
+                
+                setAutoLog((prevLogs) => [
+                  `⏰ [HOURLY DISPATCH CYCLE] Hourly countdown completed! Auto-broadcasting top setup to Telegram (Interval: ${formatCadenceValue(hourlyIntervalMinutesRef.current)})...`,
+                  `🏆 Dynamic asset: ${topMarket.name}`,
+                  ...prevLogs.slice(0, 48)
+                ]);
+                
+                handleTriggerDetection(topMarket);
+              } else {
+                setAutoLog((prevLogs) => [
+                  `⚠️ [HOURLY DISPATCH SUPPRESSED] Countdown reached 0 cycle, but scanner is active/cooldown (State: ${scannerStateRef.current}, Generating: ${generatingSignalRef.current}). Overlapping signal omitted to remain with exactly one live signal.`,
+                  ...prevLogs.slice(0, 48)
+                ]);
+              }
             }, 0);
             
             // Reset countdown
@@ -760,22 +770,19 @@ export default function VolatilityScanner({
 
       const { text: feedbackText } = compileFeedbackMessage(current, collectedDigits);
 
-      if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
-        try {
-          const feedRes = await onPostDirectTelegram(feedbackText);
-          if (feedRes.success) {
-            setAutoLog((prev) => [`🚀 Signal feedback report successfully posted to Telegram!`, ...prev.slice(0, 49)]);
-          } else {
-            setAutoLog((prev) => [`❌ Failed to post signal feedback: ${feedRes.error}`, ...prev.slice(0, 49)]);
-          }
-        } catch (fErr: any) {
-          setAutoLog((prev) => [`❌ Error dispatching feedback report: ${fErr.message}`, ...prev.slice(0, 49)]);
-        }
-      }
-
       // Generate next signal schedule target dynamically in local timezone (12-hour format with AM/PM)
       const now = new Date();
-      const secondsToNext = cooldownDuration + (hourlyIntervalMinutesRef.current * 60);
+      let secondsToNext = 0;
+      if (broadcastFrequencyRef.current === "hourly") {
+        let targetSecs = hourlyTimerLeftRef.current;
+        // Keep adding interval steps until we clear the cooldown duration we are currently entering
+        while (targetSecs < cooldownDuration) {
+          targetSecs += hourlyIntervalMinutesRef.current * 60;
+        }
+        secondsToNext = targetSecs;
+      } else {
+        secondsToNext = cooldownDuration + 300; // 5 minute estimated gap for dynamic patterns
+      }
       const nextDate = new Date(now.getTime() + secondsToNext * 1000);
       
       let hours = nextDate.getHours();
@@ -786,28 +793,28 @@ export default function VolatilityScanner({
       const minutesStr = String(minutes).padStart(2, "0");
       const nextTimeFormatted = `${hours}:${minutesStr} ${ampm}`;
 
-      let expiryText = `⏰ <b>𝐍𝐄𝐗𝐓 𝐒𝐈𝐆𝐍𝐀𝐋 𝐀𝐋𝐄𝐑𝐓!</b> ⏰\n\n`;
-      expiryText += `Always remember poverty is the biggest enemy....🔥🫸🔥\n`;
-      expiryText += `🔥 <b>dbot sv 1 bot</b> , we catch <b>${nextTimeFormatted}</b> for another powerful signal!\n`;
-      expiryText += `(Over/under)\n\n`;
-      expiryText += `💻 Make sure you're on https://www.mrzetuzetu.site\n`;
-      expiryText += `🤖 Bot ready ➕ Focused ➕ Active\n`;
-      expiryText += `💰 Let's trade and make that money together! 🤑📈\n\n`;
-      expiryText += `#zetuzetu.site Moves #maziwa Time 💸`;
+      // Create a single combined message containing BOTH the trade results and next signal schedule info to prevent double messages
+      const singleCombinedMessage = `${feedbackText}\n\n` +
+        `⏰ <b>𝐍𝐄𝐗𝐓 𝐒𝐈𝐆𝐍𝐀𝐋 𝐀𝐋𝐄𝐑𝐓!</b> ⏰\n\n` +
+        `Always remember poverty is the biggest enemy....🔥🫸🔥\n` +
+        `🔥 <b>dbot sv 1 bot</b> , we catch <b>${nextTimeFormatted}</b> for another powerful signal!\n` +
+        `(Over/under)\n\n` +
+        `💻 Make sure you're on https://www.mrzetuzetu.site\n` +
+        `🤖 Bot ready ➕ Focused ➕ Active\n` +
+        `💰 Let's trade and make that money together! 🤑📈\n\n` +
+        `#zetuzetu.site Moves #maziwa Time 💸`;
 
       if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
-        setTimeout(async () => {
-          try {
-            const res = await onPostDirectTelegram(expiryText);
-            if (res.success) {
-              setAutoLog((prev) => [`🚀 Expiration alert successfully shared with the channel!`, ...prev.slice(0, 49)]);
-            } else {
-              setAutoLog((prev) => [`❌ Failed to send Expiry alert on Telegram: ${res.error}`, ...prev.slice(0, 49)]);
-            }
-          } catch (err: any) {
-            setAutoLog((prev) => [`❌ Error dispatching expiry message: ${err.message}`, ...prev.slice(0, 49)]);
+        try {
+          const res = await onPostDirectTelegram(singleCombinedMessage);
+          if (res.success) {
+            setAutoLog((prev) => [`🚀 Unified feedback & Next Signal Alert posted to Telegram successfully!`, ...prev.slice(0, 49)]);
+          } else {
+            setAutoLog((prev) => [`❌ Failed to post unified message: ${res.error}`, ...prev.slice(0, 49)]);
           }
-        }, 1500);
+        } catch (err: any) {
+          setAutoLog((prev) => [`❌ Error dispatching unified message: ${err.message}`, ...prev.slice(0, 49)]);
+        }
       }
 
     } else if (scannerStateRef.current === "COOLDOWN") {
@@ -819,19 +826,6 @@ export default function VolatilityScanner({
       const logReady = `🟢 [Scanner Resumed] Cooldown complete! Resuming real-time monitoring across all 10 indices for setups >= ${minStrengthThresholdRef.current}%.`;
       setAutoLog((prev) => [logReady, ...prev.slice(0, 49)]);
       playBeep(1000, 0.35);
-
-      // Inform users that cooldown is over and bot is ready to send another signal
-      let readyText = `<b>🟢 BOT MONITOR READY FOR NEXT SIGNAL 🟢</b>\n\n`;
-      readyText += `Our Multi-Market Scanner has finished its cooldown cycle.\n`;
-      readyText += `⭐ <b>Minimum Strength Target:</b> <code>>= ${minStrengthThresholdRef.current}%</code>\n`;
-      readyText += `📊 Volatility indices are active. Get ready for the next high-probability digit pattern!`;
-
-      if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
-        try {
-          await onPostDirectTelegram(readyText);
-          setAutoLog((prev) => [`🚀 Live alert dispatched: Cooldown finished. Ready for next setups.`, ...prev.slice(0, 49)]);
-        } catch (err) {}
-      }
     }
   };
 
@@ -1010,6 +1004,16 @@ export default function VolatilityScanner({
   };
 
   const handleTriggerDetection = async (targetMarket: MarketIndex) => {
+    // Strictly prevent concurrent generation or duplicate dispatches
+    if (generatingSignalRef.current || scannerStateRef.current !== "SCANNING") {
+      setAutoLog((prev) => [
+        `⚠️ Blocked concurrent trigger on ${targetMarket.name}: Scanner state=${scannerStateRef.current} (Generating: ${generatingSignalRef.current})`,
+        ...prev.slice(0, 49)
+      ]);
+      return;
+    }
+
+    generatingSignalRef.current = true;
     setGeneratingSignal(true);
     
     const logMsg = `⚙️ Formulating high-accuracy message parameters for ${targetMarket.name}...`;
@@ -1174,6 +1178,7 @@ export default function VolatilityScanner({
         }
       }
     } finally {
+      generatingSignalRef.current = false;
       setGeneratingSignal(false);
     }
   };
@@ -1663,13 +1668,14 @@ export default function VolatilityScanner({
                   </label>
                   <select
                     id="broadcast-cadence-dropdown"
-                    value={[2, 5, 15, 30, 45, 60, 90, 120].includes(hourlyIntervalMinutes) ? hourlyIntervalMinutes : ""}
+                    value={[0.5, 2, 5, 15, 30, 45, 60, 90, 120].includes(hourlyIntervalMinutes) ? hourlyIntervalMinutes : ""}
                     onChange={(e) => {
                       const val = parseFloat(e.target.value);
                       if (!isNaN(val)) {
                         setHourlyIntervalMinutes(val);
                         setHourlyTimerLeft(val * 60);
                         const names: Record<number, string> = {
+                          0.5: "30 seconds",
                           2: "2 minutes",
                           5: "5 minutes",
                           15: "15 minutes",
@@ -1687,9 +1693,10 @@ export default function VolatilityScanner({
                     }}
                     className="w-full bg-slate-950 border border-slate-850 text-[#2ac1f6] text-[11px] py-1.5 px-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#2ac1f6]/60 cursor-pointer font-bold"
                   >
-                    {![2, 5, 15, 30, 45, 60, 90, 120].includes(hourlyIntervalMinutes) && (
+                    {![0.5, 2, 5, 15, 30, 45, 60, 90, 120].includes(hourlyIntervalMinutes) && (
                       <option value="">Custom ({formatCadenceValue(hourlyIntervalMinutes)})</option>
                     )}
+                    <option value="0.5">30 seconds</option>
                     <option value="2">2 minutes</option>
                     <option value="5">5 minutes</option>
                     <option value="15">15 minutes</option>
@@ -1706,6 +1713,7 @@ export default function VolatilityScanner({
                   <span className="text-slate-400 text-[9.5px] font-semibold font-sans block">Quick Interval Actions:</span>
                   <div className="flex flex-wrap gap-1">
                     {[
+                      { label: "30s", mins: 0.5 },
                       { label: "2m", mins: 2 },
                       { label: "5m", mins: 5 },
                       { label: "15m", mins: 15 },
@@ -1722,6 +1730,7 @@ export default function VolatilityScanner({
                           setHourlyIntervalMinutes(opt.mins);
                           setHourlyTimerLeft(opt.mins * 60);
                           const names: Record<number, string> = {
+                            0.5: "30 seconds",
                             2: "2 minutes",
                             5: "5 minutes",
                             15: "15 minutes",
@@ -1750,7 +1759,7 @@ export default function VolatilityScanner({
 
                 <input
                   type="range"
-                  min="1"
+                  min="0.5"
                   max="120"
                   step="0.5"
                   value={hourlyIntervalMinutes}

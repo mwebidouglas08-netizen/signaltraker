@@ -20,12 +20,25 @@ import {
   Info, 
   AlertTriangle,
   RotateCcw,
-  BookOpen
+  BookOpen,
+  LayoutDashboard,
+  Settings,
+  Radio,
+  FolderSync,
+  Save,
+  Lock,
+  User,
+  Key,
+  Shield
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import TelegramConfigPanel from "./components/TelegramConfigPanel";
 import TradingSignalForm from "./components/TradingSignalForm";
 import VolatilityScanner from "./components/VolatilityScanner";
+import DashboardView from "./components/DashboardView";
+import AlertsView from "./components/AlertsView";
+import TemplatesView from "./components/TemplatesView";
+import SettingsView from "./components/SettingsView";
 import { TradingSignal, TelegramConfig, SignalStatus, SignalUpdate } from "./types";
 import { Cpu } from "lucide-react";
 
@@ -33,6 +46,121 @@ const LOCAL_STORAGE_KEY_CONFIG = "tg_signal_broadcaster_config";
 const LOCAL_STORAGE_KEY_SIGNALS = "tg_signal_broadcaster_signals";
 
 export default function App() {
+  // --- AUTHENTICATION STATE ---
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return !!localStorage.getItem("zeta_auth_token");
+  });
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState("");
+
+  // --- PREVENT INSPECT ELEMENT / SPECIAL HOTKEYS ---
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Disable F12 Key
+      if (e.key === "F12" || e.keyCode === 123) {
+        e.preventDefault();
+        return;
+      }
+
+      const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+      const isShift = e.shiftKey;
+      const isAlt = e.altKey;
+
+      if (isCmdOrCtrl) {
+        const keyLower = e.key ? e.key.toLowerCase() : "";
+        // Disable Ctrl+U / Cmd+U (View Source)
+        if (keyLower === "u" || e.keyCode === 85) {
+          e.preventDefault();
+          return;
+        }
+
+        // Disable Ctrl+Shift+I / Cmd+Opt+I (Developer Tools)
+        if (isShift && (keyLower === "i" || e.keyCode === 73)) {
+          e.preventDefault();
+          return;
+        }
+
+        // Disable Ctrl+Shift+J / Cmd+Opt+J (Console window)
+        if (isShift && (keyLower === "j" || e.keyCode === 74)) {
+          e.preventDefault();
+          return;
+        }
+
+        // Disable Ctrl+Shift+C / Cmd+Opt+C (Element selection)
+        if (isShift && (keyLower === "c" || e.keyCode === 67)) {
+          e.preventDefault();
+          return;
+        }
+
+        // Disable Ctrl+S / Cmd+S (Save Page)
+        if (keyLower === "s" || e.keyCode === 83) {
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // Check Mac Cmd+Alt+I / J
+      if (isCmdOrCtrl && isAlt) {
+        const keyLower = e.key ? e.key.toLowerCase() : "";
+        if (keyLower === "i" || keyLower === "j" || keyLower === "c") {
+          e.preventDefault();
+          return;
+        }
+      }
+    };
+
+    document.addEventListener("contextmenu", handleContextMenu);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("contextmenu", handleContextMenu);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginUsername.trim() || !loginPassword) {
+      setLoginError("Please enter both username and password.");
+      return;
+    }
+
+    setLoginLoading(true);
+    setLoginError("");
+
+    try {
+      const response = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: loginUsername,
+          password: loginPassword,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Login verification failed.");
+      }
+
+      localStorage.setItem("zeta_auth_token", data.token);
+      setIsAuthenticated(true);
+      setLoginUsername("");
+      setLoginPassword("");
+    } catch (err: any) {
+      setLoginError(err.message || "Invalid credentials.");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
   // --- STATE ---
   const [config, setConfig] = useState<TelegramConfig>({
     botToken: "",
@@ -47,7 +175,8 @@ export default function App() {
   
   // App states
   const [aiConfigured, setAiConfigured] = useState(false);
-  const [activeTab, setActiveTab] = useState<"compose" | "scanner" | "history">("scanner");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "scanner" | "alerts" | "compose" | "history" | "templates" | "settings">("compose");
+  const [loadedTemplate, setLoadedTemplate] = useState<any | null>(null);
   const [currentDraft, setCurrentDraft] = useState<{
     assetClass: string;
     symbol: string;
@@ -70,6 +199,11 @@ export default function App() {
   const [broadcastError, setBroadcastError] = useState("");
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
   const [lastBroadcastId, setLastBroadcastId] = useState<string | null>(null);
+
+  // Viewport custom save template/blueprint states
+  const [showViewportSaveForm, setShowViewportSaveForm] = useState(false);
+  const [viewportTemplateName, setViewportTemplateName] = useState("");
+  const [viewportSaveStatus, setViewportSaveStatus] = useState("");
 
   // Active Signal Management
   const [selectedSignal, setSelectedSignal] = useState<TradingSignal | null>(null);
@@ -143,11 +277,56 @@ export default function App() {
     setEditableRationale(data.rationale);
     setBroadcastSuccess(false);
     setBroadcastError("");
+    setViewportTemplateName(`${data.symbol || "Custom"} ${data.action || "Trade"} Custom Setup`);
+    setShowViewportSaveForm(false);
+    setViewportSaveStatus("");
 
     if (config.enableManualBroadcast !== false && !skipAutoBroadcast) {
       setTimeout(() => {
         executeAutoBroadcast(data);
       }, 50);
+    }
+  };
+
+  // Save the currently-focused viewport draft as a Custom blueprint template
+  const handleSaveViewportTemplate = () => {
+    if (!viewportTemplateName.trim()) {
+      setViewportSaveStatus("Please enter a valid blueprint configuration name.");
+      return;
+    }
+
+    try {
+      const STORAGE_KEY_BLUEPRINTS = "broadcaster_blueprints";
+      const savedStr = localStorage.getItem(STORAGE_KEY_BLUEPRINTS);
+      let list = [];
+      if (savedStr) {
+        try {
+          list = JSON.parse(savedStr);
+        } catch (e) {
+          list = [];
+        }
+      }
+
+      const newBlueprint = {
+        id: "blueprint_" + Date.now(),
+        name: viewportTemplateName.trim(),
+        type: currentDraft?.assetClass || "Other",
+        symbol: (currentDraft?.symbol || "CUSTOM").trim().toUpperCase(),
+        action: (currentDraft?.action || "BUY").trim().toUpperCase(),
+        strategy: currentDraft?.tp1 ? `Custom entry with active TP thresholds` : "Active formulated draft copy",
+        notes: editableText || currentDraft?.formattedText || "Sourced from customized signal builder draft."
+      };
+
+      list = [newBlueprint, ...list];
+      localStorage.setItem(STORAGE_KEY_BLUEPRINTS, JSON.stringify(list));
+
+      setViewportSaveStatus("Template saved successfully! Check 'Blueprints & Templates' tab. 💾");
+      setTimeout(() => {
+        setShowViewportSaveForm(false);
+        setViewportSaveStatus("");
+      }, 2500);
+    } catch (err) {
+      setViewportSaveStatus("Error saving blueprint. Please retry.");
     }
   };
 
@@ -299,6 +478,34 @@ export default function App() {
       setBroadcastError(err.message || "An issue occurred connecting to Telegram.");
     } finally {
       setIsBroadcasting(false);
+    }
+  };
+
+  // Send a standalone manual general alert to the channel (standby warning, results follow-up, or schedule releases)
+  const handleSendGeneralAlert = async (text: string) => {
+    if (!config.botToken || !config.chatId) {
+      return { success: false, error: "Please configure your Telegram credentials in settings first!" };
+    }
+
+    try {
+      const response = await fetch("/api/telegram/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          botToken: config.botToken,
+          chatId: config.chatId,
+          text: text,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to broadcast digital announcement.");
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || "Failed to post." };
     }
   };
 
@@ -508,162 +715,346 @@ export default function App() {
     return true;
   });
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500 selection:text-white" id="main-app-container">
-      {/* Top Navigation Bar with branding and health report */}
-      <header className="border-b border-slate-900 bg-slate-950/80 backdrop-blur-md sticky top-0 z-50 px-6 py-4" id="top-navbar">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between font-sans selection:bg-sky-500 selection:text-white relative overflow-hidden" id="login-landing-container">
+        {/* Decorative background orbits & glows */}
+        <div className="absolute top-[-10%] left-[-20%] w-[600px] h-[600px] rounded-full bg-gradient-to-br from-purple-650/10 to-transparent blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-[-10%] right-[-20%] w-[600px] h-[600px] rounded-full bg-gradient-to-tr from-sky-655/10 to-transparent blur-[120px] pointer-events-none" />
+        
+        {/* Minimalist Top Nav Header */}
+        <header className="w-full max-w-7xl mx-auto px-6 py-5 flex justify-between items-center z-10" id="login-header">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/20" id="brand-logo-icon">
-              <Share2 className="w-5 h-5 text-white" />
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/20" id="login-brand-logo">
+              <Share2 className="w-4.5 h-4.5 text-white" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base font-bold tracking-tight text-white font-sans">Signal Broadcaster</h1>
-                <span className="text-[10px] px-2 py-0.5 bg-slate-900 border border-slate-800 text-sky-400 rounded-full font-semibold">
-                  v2.1
-                </span>
+            <div className="text-left">
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-sm font-black tracking-tight text-white">Zeta Broadcast</h1>
+                <span className="text-[9px] px-1.5 py-0.5 bg-slate-900 border border-slate-850 text-sky-400 rounded-full font-bold">2.1</span>
               </div>
-              <p className="text-[11px] text-slate-400">Secure trading alerts directly to your Telegram audiences</p>
+              <p className="text-[9px] text-slate-500 font-medium font-sans">Automatic Trading Signal Distribution Hub</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] bg-slate-900/80 border border-slate-850 px-3 py-1.5 rounded-full text-slate-400 font-mono" id="scanner-health-pill">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>BOT MONITORING (10 INDEXES ONLINE)</span>
+          </div>
+        </header>
+
+        {/* Core Hero Landing & Login Split Grid */}
+        <main className="flex-1 w-full max-w-7xl mx-auto px-6 py-6 md:py-12 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center z-10" id="login-main-section">
+          {/* Left Hero Features Column */}
+          <div className="lg:col-span-12 xl:col-span-7 space-y-6 lg:pr-8 text-left" id="login-hero-left">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-950/40 border border-sky-900/40 text-[#2ac1f6] text-[10px] font-bold uppercase tracking-wider" id="pro-badge">
+              <Flame className="w-3.5 h-3.5 animate-pulse" />
+              <span>Zeta Professional Execution System</span>
+            </div>
+            
+            <h2 className="text-3xl md:text-5xl font-black tracking-tight text-white leading-[1.1] font-sans" id="hero-title">
+              Instant Digit Signals <br />
+              <span className="bg-gradient-to-r from-sky-400 via-indigo-400 to-indigo-500 bg-clip-text text-transparent">Direct to Telegram</span>
+            </h2>
+            
+            <p className="text-sm text-slate-400 leading-relaxed max-w-xl" id="hero-desc">
+              Empower your digital trading audience with automated high-probability digit pattern notifications, direct channel telemetries, and live synthetic indices evaluation. Complete control, all in one single place.
+            </p>
+
+            {/* Quick Micro Status Stats Row */}
+            <div className="grid grid-cols-3 gap-4 pt-4 max-w-lg" id="login-stats-grid">
+              <div className="bg-slate-900/40 border border-slate-900 p-3.5 rounded-xl space-y-1">
+                <div className="text-slate-500 text-[9px] font-bold uppercase tracking-wider">WebSocket Feed</div>
+                <div className="text-[#2ac1f6] font-mono font-black text-sm">Deriv Ingestion</div>
+              </div>
+              <div className="bg-slate-900/40 border border-slate-900 p-3.5 rounded-xl space-y-1">
+                <div className="text-slate-500 text-[9px] font-bold uppercase tracking-wider">Active Monitoring</div>
+                <div className="text-emerald-400 font-mono font-black text-sm">10 Assets</div>
+              </div>
+              <div className="bg-slate-900/40 border border-slate-900 p-3.5 rounded-xl space-y-1">
+                <div className="text-slate-500 text-[9px] font-bold uppercase tracking-wider">Confidence limit</div>
+                <div className="text-indigo-400 font-mono font-black text-sm">&gt;= 85%</div>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* Gemini Setup Indicator */}
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/60 border border-slate-850 rounded-lg text-xs" id="ai-engine-status-badge">
-              <div className={`w-2 h-2 rounded-full ${aiConfigured ? "bg-emerald-500" : "bg-amber-400"}`}></div>
-              <span className="text-slate-400 font-medium">Gemini 3.5 AI:</span>
-              <span className={aiConfigured ? "text-emerald-400 font-semibold" : "text-amber-400 font-semibold"}>
-                {aiConfigured ? "Secured" : "Incomplete Setup (Fallback used)"}
-              </span>
-            </div>
+          {/* Right Login Card Column */}
+          <div className="lg:col-span-12 xl:col-span-5 flex justify-center lg:justify-end" id="login-form-right">
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, ease: "easeOut" }}
+              className="w-full max-w-md bg-slate-900/70 border border-slate-850 p-6 md:p-8 rounded-2xl shadow-2xl backdrop-blur-md space-y-6"
+              id="login-card"
+            >
+              <div className="space-y-1.5 text-left">
+                <div className="flex items-center gap-2 text-sky-400" id="login-card-header">
+                  <Shield className="w-5 h-5 text-[#2ac1f6]" />
+                  <h3 className="text-lg font-bold text-white font-sans">Dashboard Access</h3>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Provide secure administrative credentials to access the controller interface.
+                </p>
+              </div>
 
-            <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-850 gap-0.5" id="primary-view-toggles">
+              {loginError && (
+                <div className="flex items-start gap-2.5 p-3 rounded-lg bg-rose-950/30 border border-rose-900/40 text-rose-400 text-xs text-left" id="login-error-alert">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleLoginSubmit} className="space-y-4 text-left" id="login-html-form">
+                {/* Username Input */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase tracking-widest text-slate-400 font-bold block" htmlFor="username">
+                    Admin Username
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                      <User className="h-4 w-4 text-slate-500" />
+                    </div>
+                    <input
+                      id="username"
+                      name="username"
+                      type="text"
+                      required
+                      placeholder="e.g. admin"
+                      value={loginUsername}
+                      onChange={(e) => setLoginUsername(e.target.value)}
+                      disabled={loginLoading}
+                      className="block w-full pl-10 pr-3 py-2.5 bg-slate-950 border border-slate-800 focus:border-sky-500 text-white rounded-xl text-xs placeholder-slate-600 outline-none transition-colors"
+                    />
+                  </div>
+                </div>
+
+                {/* Password Input */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] uppercase tracking-widest text-slate-400 font-bold block" htmlFor="password">
+                      Security Password
+                    </label>
+                  </div>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                      <Key className="h-4 w-4 text-slate-500" />
+                    </div>
+                    <input
+                      id="password"
+                      name="password"
+                      type="password"
+                      required
+                      placeholder="e.g. ••••••••"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      disabled={loginLoading}
+                      className="block w-full pl-10 pr-3 py-2.5 bg-slate-950 border border-slate-800 focus:border-sky-500 text-white rounded-xl text-xs placeholder-slate-600 outline-none transition-colors"
+                    />
+                  </div>
+                </div>
+
+                {/* Action Button */}
+                <button
+                  type="submit"
+                  disabled={loginLoading}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold text-xs tracking-wider uppercase shadow-lg shadow-indigo-600/10 cursor-pointer transition-all duration-150 flex items-center justify-center gap-2 disabled:opacity-50"
+                  id="login-submit-btn"
+                >
+                  {loginLoading ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      <span>Verifying Credentials...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>Authenticate Securely</span>
+                    </>
+                  )}
+                </button>
+              </form>
+
+              {/* Secure Credentials Hint Accordion Helper */}
+              <div className="pt-2 border-t border-slate-850" id="credentials-guide">
+                <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-850 flex items-start gap-2.5 text-[10px] text-slate-400">
+                  <Info className="w-4 h-4 text-sky-500 shrink-0 mt-0.5" />
+                  <div className="text-left leading-normal space-y-0.5">
+                    <p className="font-semibold text-slate-300">Default Access Passwords:</p>
+                    <p>Username: <code className="text-[#2ac1f6] font-bold font-mono">admin</code></p>
+                    <p>Password: <code className="text-[#2ac1f6] font-bold font-mono">password</code></p>
+                    <p className="text-[9px] text-[#4facff] pt-1">Admin username/passwords can also be bound dynamically via server-side environment variables.</p>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        </main>
+
+        {/* Landing Page Footer */}
+        <footer className="w-full max-w-7xl mx-auto px-6 py-5 border-t border-slate-900/60 flex flex-col md:flex-row justify-between items-center text-[10px] text-slate-500 gap-2 z-10" id="login-footer">
+          <span>&copy; {new Date().getFullYear()} Zeta Broadcast Group. All rights reserved.</span>
+          <div className="flex gap-4">
+            <span className="hover:text-slate-400">Security Encrypted (AES-256)</span>
+            <span>&bull;</span>
+            <span className="hover:text-slate-400 font-mono">Active Ingress Port: 3000</span>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col lg:flex-row font-sans selection:bg-sky-500 selection:text-white" id="main-app-container">
+      
+      {/* DESKTOP/MOBILE SIDEBAR (Designed to match the high-fidelity screenshot) */}
+      <aside className="w-full lg:w-64 bg-slate-1000 border-b lg:border-b-0 lg:border-r border-slate-900/80 p-5 flex flex-col gap-6 shrink-0 z-50 bg-slate-950/40 backdrop-blur-md" id="sidebar-panel">
+        <div className="flex items-center gap-3 px-1">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/20" id="brand-logo-icon">
+            <Share2 className="w-4.5 h-4.5 text-white" />
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-sm font-black tracking-tight text-white font-sans">Zeta Broadcast</h1>
+              <span className="text-[9px] px-1.5 py-0.5 bg-slate-900 border border-slate-850 text-sky-400 rounded-full font-bold">2.1</span>
+            </div>
+            <p className="text-[10px] text-slate-400 font-medium font-sans">Telegram Control Hub</p>
+          </div>
+        </div>
+
+        {/* Sidebar Nav Items */}
+        <nav className="flex-1 flex flex-col gap-1 text-xs font-semibold" id="sidebar-nav">
+          {[
+            { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+            { id: "scanner", label: "Signals", icon: Cpu, badge: "Live" },
+            { id: "alerts", label: "Alerts", icon: Bell },
+            { id: "compose", label: "Draft Signal", icon: Plus },
+            { id: "history", label: "History", icon: History, count: signals.length },
+            { id: "templates", label: "Templates", icon: FolderSync },
+            { id: "settings", label: "Settings", icon: Settings }
+          ].map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
               <button
-                onClick={() => setActiveTab("scanner")}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                  activeTab === "scanner"
-                    ? "bg-slate-800 text-white shadow-sm"
-                    : "text-slate-400 hover:text-white"
-                }`}
+                key={item.id}
+                onClick={() => setActiveTab(item.id as any)}
                 type="button"
-                id="tab-toggle-scanner"
-              >
-                <Cpu className="w-3.5 h-3.5 text-sky-450" />
-                <span>Scanner Bot</span>
-                <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse shrink-0"></span>
-              </button>
-              <button
-                onClick={() => setActiveTab("compose")}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                  activeTab === "compose"
-                    ? "bg-slate-800 text-white shadow-sm"
-                    : "text-slate-400 hover:text-white"
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl cursor-pointer transition-all duration-150 relative ${
+                  isActive
+                    ? "bg-slate-900/90 text-sky-400 border border-slate-850 shadow-sm"
+                    : "text-slate-400 hover:text-slate-100 hover:bg-slate-900/30 border border-transparent"
                 }`}
-                type="button"
-                id="tab-toggle-compose"
+                id={`sidebar-item-${item.id}`}
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Composer</span>
-              </button>
-              <button
-                onClick={() => setActiveTab("history")}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer relative ${
-                  activeTab === "history"
-                    ? "bg-slate-800 text-white shadow-sm"
-                    : "text-slate-400 hover:text-white"
-                }`}
-                type="button"
-                id="tab-toggle-history"
-              >
-                <History className="w-3.5 h-3.5" />
-                <span>Running feeds ({signals.length})</span>
-                {signals.some((s) => s.status === "ACTIVE") && (
-                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-rose-500 rounded-full"></span>
+                <div className="flex items-center gap-2.5 flex-1 text-left">
+                  <Icon className={`w-4 h-4 transition-colors shrink-0 ${isActive ? "text-sky-400" : "text-slate-500 hover:text-slate-350"}`} />
+                  <span className="font-sans leading-none">{item.label}</span>
+                </div>
+
+                {/* Additional Indicators */}
+                {item.badge && (
+                  <span className="text-[8px] tracking-wide font-black px-1.5 py-0.5 rounded bg-emerald-950/40 text-emerald-400 uppercase font-mono animate-pulse">
+                    {item.badge}
+                  </span>
+                )}
+                {item.count !== undefined && item.count > 0 && (
+                  <span className="text-[9px] font-mono font-bold px-2 py-0.5 bg-slate-900 border border-slate-850 rounded-full text-slate-440 shrink-0">
+                    {item.count}
+                  </span>
                 )}
               </button>
+            );
+          })}
+        </nav>
+
+        {/* Bottom Sidebar Status Badge */}
+        <div className="pt-4 border-t border-slate-900/80 space-y-3 font-sans">
+          <div className="flex items-center gap-2 text-[10px] text-slate-400 px-1">
+            <div className={`w-2 h-2 rounded-full ${aiConfigured ? "bg-emerald-500" : "bg-amber-400"}`}></div>
+            <span>AI Status: <b>{aiConfigured ? "Secured" : "Fallback"}</b></span>
+          </div>
+          <div className="text-[10px] text-slate-500 leading-normal px-1">
+            Admin token: <code className="font-mono text-[9px] text-[#4facff]">{config.botToken ? "••••" + config.botToken.slice(-4) : "Undefined"}</code>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.removeItem("zeta_auth_token");
+              setIsAuthenticated(false);
+            }}
+            className="w-full mt-2 py-1.5 px-3 rounded-lg bg-rose-950/20 hover:bg-rose-950/40 text-rose-455 border border-rose-900/35 hover:border-rose-900/60 text-[10px] font-bold tracking-wide uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <Lock className="w-3 h-3 text-rose-400" />
+            <span>Admin Logout</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* RIGHT VIEWPORT CONTAINER (Displays selected view + sticky simulated Telegram device) */}
+      <div className="flex-1 flex flex-col min-w-0" id="right-viewport">
+        {/* Workspace Active Header */}
+        <header className="border-b border-slate-900 bg-slate-950/60 backdrop-blur-md px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3 sticky top-0 z-40">
+          <div>
+            <h2 className="text-xs font-bold uppercase tracking-widest text-[#2ac1f6]">Zeta Core Processor</h2>
+            <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+              Live Feed Target: <span className="text-slate-200">{config.chatId || "-1002590400274"}</span> {config.isConnected && " &bull; Linked 🔗"}
             </div>
           </div>
-        </div>
-      </header>
-
-      {/* Dynamic Status bar showing active broadcast settings with toggles as requested by user */}
-      <div className="bg-slate-900/60 border-b border-slate-900/80 py-3 px-6 font-sans backdrop-blur-sm shadow-inner" id="global-broadcast-sharing-status-bar">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-xs">
-          <div className="flex flex-wrap items-center gap-2 text-slate-400">
-            <span className="flex items-center gap-1.5 text-sky-400">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
-              </span>
-              <span>Primary Telegram Feed:</span>
+          <div className="flex items-center gap-3 text-xs">
+            <span className="text-slate-400 font-medium font-sans">Sharing Status:</span>
+            <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border uppercase ${
+              config.enableScannerBroadcast !== false ? "bg-emerald-950/45 text-emerald-400 border-emerald-900/30" : "bg-slate-900 border-slate-850 text-slate-500"
+            }`}>
+              {config.enableScannerBroadcast !== false ? "🟢 Broadcasting Live" : "🔴 Setup Draft Loops"}
             </span>
-            <code className="bg-slate-950 px-2.5 py-1 rounded text-sky-300 border border-slate-850 font-mono font-medium text-[11px]">
-              {config.chatId || "-1002590400274"}
-            </code>
-            {config.isConnected && (
-              <span className="bg-emerald-950/40 text-emerald-400 border border-emerald-950/80 px-2 py-0.5 rounded text-[10px]">
-                Linked 🔗
-              </span>
-            )}
           </div>
-          
-          <div className="flex flex-col sm:flex-row flex-wrap items-center gap-3 sm:gap-6">
-            {/* Toggle Option 1: Scanner Setup Alerts */}
-            <div className="flex items-center gap-2.5">
-              <span className="text-slate-300 font-medium">1. Volatility Scanner Live:</span>
-              <button
-                type="button"
-                onClick={() => persistConfig({
-                  ...config,
-                  enableScannerBroadcast: config.enableScannerBroadcast === false ? true : false
-                })}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold border cursor-pointer transition-all duration-150 transform active:scale-95 flex items-center gap-1.5 ${
-                  config.enableScannerBroadcast !== false
-                    ? "bg-emerald-950 border-emerald-800 text-emerald-300 shadow-md shadow-emerald-950/20"
-                    : "bg-slate-900 border-slate-800 text-slate-500 hover:bg-slate-850 hover:text-slate-400"
-                }`}
-                id="header-toggle-scanner-share"
-              >
-                <div className={`w-1.5 h-1.5 rounded-full ${config.enableScannerBroadcast !== false ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`}></div>
-                <span>{config.enableScannerBroadcast !== false ? "🟢 SHARING LIVE" : "🔴 OFF (DRAFTS)"}</span>
-              </button>
-            </div>
+        </header>
 
-            {/* Toggle Option 2: Manual AI Form Alerts */}
-            <div className="flex items-center gap-2.5 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-850 w-full sm:w-auto justify-between">
-              <span className="text-slate-300 font-medium">2. AI Manual Composer:</span>
-              <button
-                type="button"
-                onClick={() => persistConfig({
-                  ...config,
-                  enableManualBroadcast: config.enableManualBroadcast === false ? true : false
-                })}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold border cursor-pointer transition-all duration-150 transform active:scale-95 flex items-center gap-1.5 ${
-                  config.enableManualBroadcast !== false
-                    ? "bg-emerald-950 border-emerald-800 text-emerald-300 shadow-md shadow-emerald-950/20"
-                    : "bg-slate-900 border-slate-800 text-slate-500 hover:bg-slate-850 hover:text-slate-400"
-                }`}
-                id="header-toggle-manual-share"
-              >
-                <div className={`w-1.5 h-1.5 rounded-full ${config.enableManualBroadcast !== false ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`}></div>
-                <span>{config.enableManualBroadcast !== false ? "🟢 AUTO-SHARE" : "🔴 OFF (REVIEW)"}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* Main Container Content */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6" id="dashboard-main-content">
         
-        {/* LEFT COLUMN (Control Panel / Forms / Parameters Settings) - spans 7 units on wide screens */}
-        <div className="lg:col-span-7 space-y-6">
-          {/* Always display connection setup to give immediate visual visibility */}
-          <TelegramConfigPanel config={config} onChange={persistConfig} />
+        {/* MAIN VIEWPORT PANELS COLUMN */}
+        <div className={`${["templates", "settings"].includes(activeTab) ? "lg:col-span-12" : "lg:col-span-7"} space-y-6`}>
+          
+          {/* Show Telegram configuration bar online context helper only for Signals and Composer views */}
+          {!["dashboard", "alerts", "templates", "settings"].includes(activeTab) && (
+            <TelegramConfigPanel config={config} onChange={persistConfig} />
+          )}
 
           <AnimatePresence mode="wait">
-            {activeTab === "scanner" ? (
+            {activeTab === "dashboard" ? (
+              <motion.div
+                key="tab-dashboard"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                id="dashboard-container-view"
+              >
+                <DashboardView 
+                  signals={signals} 
+                  config={config} 
+                  onNavigate={(tab) => setActiveTab(tab)} 
+                  persistConfig={persistConfig}
+                  aiConfigured={aiConfigured}
+                  onPostDirectTelegram={handlePostDirectTelegram}
+                  onSignalGenerated={handleSignalGenerated}
+                  currentDraft={currentDraft}
+                  editableText={editableText}
+                  setEditableText={setEditableText}
+                  editableRationale={editableRationale}
+                  setEditableRationale={setEditableRationale}
+                  loadedTemplate={loadedTemplate}
+                  onClearLoadedTemplate={() => setLoadedTemplate(null)}
+                  selectedSignal={selectedSignal}
+                  onSelectSignal={setSelectedSignal}
+                  onSendSignalUpdate={handleSendSignalUpdate}
+                  customUpdateText={customUpdateText}
+                  onCustomUpdateChange={setCustomUpdateText}
+                  submittingUpdate={submittingUpdate}
+                  updateError={updateError}
+                />
+              </motion.div>
+            ) : activeTab === "scanner" ? (
               <motion.div
                 key="tab-scanner"
                 initial={{ opacity: 0, y: 10 }}
@@ -677,6 +1068,27 @@ export default function App() {
                   telegramConfig={config}
                   aiConfigured={aiConfigured}
                   onPostDirectTelegram={handlePostDirectTelegram}
+                />
+              </motion.div>
+            ) : activeTab === "alerts" ? (
+              <motion.div
+                key="tab-alerts"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                id="alerts-container-view"
+              >
+                <AlertsView
+                  signals={signals}
+                  selectedSignal={selectedSignal}
+                  onSelectSignal={setSelectedSignal}
+                  onSendSignalUpdate={handleSendSignalUpdate}
+                  customUpdateText={customUpdateText}
+                  onCustomUpdateChange={setCustomUpdateText}
+                  submittingUpdate={submittingUpdate}
+                  updateError={updateError}
+                  telegramConfig={config}
+                  onPostGeneralAlert={handleSendGeneralAlert}
                 />
               </motion.div>
             ) : activeTab === "compose" ? (
@@ -695,6 +1107,9 @@ export default function App() {
                   autoShareEnabled={config.enableManualBroadcast !== false}
                   onAutoShareToggle={(val) => persistConfig({ ...config, enableManualBroadcast: val })}
                   telegramConfigChatId={config.chatId}
+                  onPostDirectTelegram={handlePostDirectTelegram}
+                  loadedTemplate={loadedTemplate}
+                  onClearLoadedTemplate={() => setLoadedTemplate(null)}
                 />
 
                 {/* Technical terminology rationale section if generated */}
@@ -722,6 +1137,40 @@ export default function App() {
                     </div>
                   </div>
                 )}
+              </motion.div>
+            ) : activeTab === "templates" ? (
+              <motion.div
+                key="tab-templates"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                id="templates-container-view"
+              >
+                <TemplatesView
+                  onLoadTemplate={(template) => {
+                    setLoadedTemplate(template);
+                    setActiveTab("compose");
+                  }}
+                  onShowSuccessAlert={(msg) => {
+                    setBroadcastSuccess(true);
+                    setBroadcastError("");
+                    setTimeout(() => setBroadcastSuccess(false), 4000);
+                  }}
+                />
+              </motion.div>
+            ) : activeTab === "settings" ? (
+              <motion.div
+                key="tab-settings"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                id="settings-container-view"
+              >
+                <SettingsView
+                  config={config}
+                  onChange={persistConfig}
+                  aiConfigured={aiConfigured}
+                />
               </motion.div>
             ) : (
               <motion.div
@@ -853,7 +1302,8 @@ export default function App() {
 
 
         {/* RIGHT COLUMN (Live Simulated Telegram Output & Message Controller) - spans 5 units */}
-        <div className="lg:col-span-5 h-fit lg:sticky lg:top-24 space-y-6">
+        {!["templates", "settings"].includes(activeTab) && (
+          <div className="lg:col-span-5 h-fit lg:sticky lg:top-24 space-y-6">
           
           {/* Telegram mock preview frame */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden flex flex-col" id="telegram-mock-phone-frame">
@@ -988,8 +1438,8 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Broadcast Trigger to live channel */}
-                  <div className="space-y-2">
+                  {/* Broadcast Trigger to live channel & Save Option */}
+                  <div className="space-y-2.5">
                     <button
                       onClick={handleBroadcastSignal}
                       disabled={isBroadcasting || !config.botToken || !config.chatId}
@@ -1012,6 +1462,52 @@ export default function App() {
                         </>
                       )}
                     </button>
+
+                    {/* Viewport save option triggers inline panel */}
+                    <button
+                      onClick={() => setShowViewportSaveForm(!showViewportSaveForm)}
+                      className="w-full py-2.5 bg-slate-900 hover:bg-slate-850 hover:text-white text-sky-400 text-xs font-semibold rounded-xl border border-slate-800 hover:border-slate-700 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      id="btn-viewport-trigger-save-draft"
+                      type="button"
+                    >
+                      <Save className="w-3.5 h-3.5 text-sky-450" />
+                      <span>{showViewportSaveForm ? "Hide Blueprint Saver" : "Save Draft as Custom Blueprint 💾"}</span>
+                    </button>
+
+                    {/* Viewport Inline save config form */}
+                    {showViewportSaveForm && (
+                      <div className="bg-slate-950 p-3.5 border border-slate-850/80 rounded-xl space-y-3.5 animate-fade-in" id="viewport-save-form-block">
+                        <div className="text-[10.5px] font-bold text-slate-350 flex items-center gap-1.5">
+                          <Save className="w-3.5 h-3.5 text-sky-455" />
+                          <span>Save Custom Blueprint Formulary</span>
+                        </div>
+                        <div className="space-y-1 font-sans">
+                          <label className="text-[9px] uppercase font-bold text-slate-500">Custom Template Name</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={viewportTemplateName}
+                              onChange={(e) => setViewportTemplateName(e.target.value)}
+                              placeholder="Blueprint Name"
+                              className="flex-1 px-3 py-1.5 text-xs bg-slate-900 border border-slate-800 rounded-lg text-white placeholder-slate-650 outline-none"
+                              id="input-viewport-template-save-name"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleSaveViewportTemplate}
+                              className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold rounded-lg transition-all"
+                            >
+                              Save
+                            </button>
+                          </div>
+                          {viewportSaveStatus && (
+                            <p className="text-[10px] text-teal-400 font-medium font-sans mt-1">
+                              {viewportSaveStatus}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {!config.isConnected && (
                       <p className="text-[10px] text-amber-400/80 text-center font-sans">
@@ -1179,6 +1675,7 @@ export default function App() {
           </div>
 
         </div>
+        )}
 
       </main>
 
@@ -1186,6 +1683,7 @@ export default function App() {
       <footer className="border-t border-slate-900 py-6 px-6 text-center text-xs text-slate-500 bg-slate-950/50 mt-auto font-sans" id="app-footer">
         <p>&copy; 2026 Telegram Signal Broadcaster Systems &bull; Crafted with intelligent high-fidelity composition frameworks.</p>
       </footer>
+      </div> {/* End right-viewport */}
     </div>
   );
 }

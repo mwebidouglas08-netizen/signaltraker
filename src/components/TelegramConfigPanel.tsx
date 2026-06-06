@@ -28,6 +28,43 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
     });
   };
 
+  const handleInstantConnect = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!config.botToken || !config.chatId) {
+      setErrorMessage("Please fill in both the Bot Token and Channel ID.");
+      setTestStatus("error");
+      return;
+    }
+
+    setTestStatus("success");
+    
+    // Perform simple client-side sanitization
+    let cleanToken = config.botToken.trim();
+    let cleanChatId = config.chatId.trim();
+
+    if (cleanChatId && !cleanChatId.startsWith("@") && !cleanChatId.startsWith("-") && isNaN(Number(cleanChatId))) {
+      cleanChatId = "@" + cleanChatId;
+    }
+    if (/^\d{7,20}$/.test(cleanChatId)) {
+      cleanChatId = "-100" + cleanChatId;
+    } else if (/^-\d{7,20}$/.test(cleanChatId) && !cleanChatId.startsWith("-100")) {
+      cleanChatId = "-100" + cleanChatId.substring(1);
+    }
+
+    setSuccessInfo({
+      title: "Linked Successfully",
+      id: cleanChatId,
+    });
+
+    onChange({
+      ...config,
+      botToken: cleanToken,
+      chatId: cleanChatId,
+      isConnected: true,
+      chatTitle: config.chatTitle || "Linked Channel",
+    });
+  };
+
   const saveConfig = (botToken: string, chatId: string) => {
     onChange({
       ...config,
@@ -271,39 +308,76 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
           </div>
         </div>
 
-        <div className="pt-2 flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
-          <button
-            type="submit"
-            disabled={testStatus === "testing" || !config.botToken || !config.chatId}
-            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-gradient-to-r from-sky-600 to-sky-500 hover:from-sky-500 hover:to-sky-400 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-white font-medium text-xs rounded-xl shadow-lg shadow-sky-500/10 cursor-pointer disabled:cursor-not-allowed transform hover:-translate-y-px active:translate-y-0 transition-all font-sans"
-            id="btn-test-connection"
-          >
-            {testStatus === "testing" ? (
-              <>
-                <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <span>Sending Test Message...</span>
-              </>
-            ) : (
-              <>
-                <Send className="w-3.5 h-3.5" />
-                <span>Verify & Save Connection</span>
-              </>
-            )}
-          </button>
+        <div className="pt-2 flex flex-wrap gap-2.5 items-stretch sm:items-center">
+          {!config.isConnected ? (
+            <>
+              <button
+                type="button"
+                onClick={handleInstantConnect}
+                disabled={!config.botToken || !config.chatId}
+                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-emerald-500/10 cursor-pointer disabled:cursor-not-allowed transform hover:-translate-y-px active:translate-y-0 transition-all font-sans"
+                id="btn-instant-connect"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Connect Bot</span>
+              </button>
 
-          {config.isConnected && (
-            <button
-              type="button"
-              onClick={handleDisconnect}
-              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/30 font-medium text-xs rounded-xl cursor-pointer transition-all font-sans"
-              id="btn-disconnect-telegram"
-            >
-              <PowerOff className="w-3.5 h-3.5" />
-              <span>Disconnect Channel</span>
-            </button>
+              <button
+                type="submit"
+                disabled={testStatus === "testing" || !config.botToken || !config.chatId}
+                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:bg-slate-900 disabled:text-slate-500 border border-slate-700 hover:border-slate-600 font-medium text-xs rounded-xl cursor-pointer disabled:cursor-not-allowed transition-all font-sans"
+                id="btn-test-connection"
+              >
+                {testStatus === "testing" ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    <span>Sending Test...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send Test Message</span>
+                  </>
+                )}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={handleDisconnect}
+                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/30 font-medium text-xs rounded-xl cursor-pointer transition-all font-sans"
+                id="btn-disconnect-telegram"
+              >
+                <PowerOff className="w-3.5 h-3.5" />
+                <span>Disconnect Channel</span>
+              </button>
+
+              <button
+                type="submit"
+                disabled={testStatus === "testing" || !config.botToken || !config.chatId}
+                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:bg-slate-900 disabled:text-slate-500 border border-slate-700 hover:border-slate-600 font-medium text-xs rounded-xl cursor-pointer disabled:cursor-not-allowed transition-all font-sans"
+                id="btn-test-connection"
+              >
+                {testStatus === "testing" ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    <span>Sending Test...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send Test Message</span>
+                  </>
+                )}
+              </button>
+            </>
           )}
 
           {config.isConnected && testStatus !== "error" && (

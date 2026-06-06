@@ -36,6 +36,25 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// App authentication endpoint
+app.post("/api/login", (req, res) => {
+  const { username, password } = req.body;
+  const targetUsername = process.env.ADMIN_USERNAME || "admin";
+  const targetPassword = process.env.ADMIN_PASSWORD || "password";
+
+  if (username && password && username.trim() === targetUsername && password === targetPassword) {
+    res.json({
+      success: true,
+      token: "zeta_session_" + Buffer.from(username.trim() + ":" + Date.now()).toString("base64")
+    });
+  } else {
+    res.status(401).json({
+      success: false,
+      error: "Invalid admin username or password. Please try again."
+    });
+  }
+});
+
 // Helper to sanitize Telegram bot credentials and channel identifiers
 function sanitizeTelegramCredentials(botToken: string, chatId: string) {
   let cleanToken = (botToken || "").trim();
