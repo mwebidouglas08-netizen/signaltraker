@@ -139,12 +139,27 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: loginUsername,
+          username: loginUsername.trim(),
           password: loginPassword,
         }),
       });
 
-      const data = await response.json();
+      const contentType = response.headers.get("content-type") || "";
+      let data: any;
+
+      if (contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        const rawText = await response.text();
+        console.error("[Auth App] Expected JSON but received plaintext/HTML:", rawText);
+        
+        // Give the user precise troubleshooting instructions if the system is booting or returned HTML
+        if (rawText.toLowerCase().includes("page")) {
+          throw new Error("The service container is warming up or routing table is building. Please wait 5-10 seconds and click Authenticate again!");
+        } else {
+          throw new Error(`Server returned unexpected content type: ${contentType || "unknown"}. Please retry.`);
+        }
+      }
 
       if (!response.ok || !data.success) {
         throw new Error(data.error || "Login verification failed.");
@@ -155,7 +170,8 @@ export default function App() {
       setLoginUsername("");
       setLoginPassword("");
     } catch (err: any) {
-      setLoginError(err.message || "Invalid credentials.");
+      console.error("[Auth App] Login failed with error:", err);
+      setLoginError(err.message || "Invalid credentials or system connection error.");
     } finally {
       setLoginLoading(false);
     }

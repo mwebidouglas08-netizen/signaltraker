@@ -38,19 +38,40 @@ app.get("/api/health", (req, res) => {
 
 // App authentication endpoint
 app.post("/api/login", (req, res) => {
-  const { username, password } = req.body;
-  const targetUsername = process.env.ADMIN_USERNAME || "admin";
-  const targetPassword = process.env.ADMIN_PASSWORD || "password";
+  try {
+    const { username, password } = req.body || {};
+    
+    // Ensure we handle trimmed comparisons safely and set fallback defaults
+    const targetUsername = (process.env.ADMIN_USERNAME || "admin").trim();
+    const targetPassword = (process.env.ADMIN_PASSWORD || "password").trim();
 
-  if (username && password && username.trim() === targetUsername && password === targetPassword) {
-    res.json({
-      success: true,
-      token: "zeta_session_" + Buffer.from(username.trim() + ":" + Date.now()).toString("base64")
-    });
-  } else {
-    res.status(401).json({
+    const providedUsername = typeof username === "string" ? username.trim() : "";
+    const providedPassword = typeof password === "string" ? password.trim() : "";
+
+    console.log(`[Auth API] Login attempt for user: "${providedUsername}"`);
+
+    if (providedUsername && providedPassword && providedUsername === targetUsername && providedPassword === targetPassword) {
+      // Use buffer safely for encoding
+      const sessionString = providedUsername + ":" + Date.now();
+      const generatedToken = "zeta_session_" + Buffer.from(sessionString).toString("base64");
+      
+      console.log(`[Auth API] Successful authentication for user: "${providedUsername}"`);
+      res.json({
+        success: true,
+        token: generatedToken
+      });
+    } else {
+      console.warn(`[Auth API] Failed authentication attempt. Active config expects: "${targetUsername}"`);
+      res.status(401).json({
+        success: false,
+        error: "Invalid admin username or password. Please try again."
+      });
+    }
+  } catch (err: any) {
+    console.error("[Auth API] Critical failure in /api/login endpoint:", err);
+    res.status(500).json({
       success: false,
-      error: "Invalid admin username or password. Please try again."
+      error: "Internal server authentication error: " + (err.message || "Unknown error")
     });
   }
 });
