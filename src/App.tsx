@@ -276,7 +276,9 @@ export default function App() {
           ...parsed
         });
       } catch (e) {
-        console.error("Failed to parse saved telegram config", e);
+        console.error("Failed to parse saved telegram config, removing corrupted entry", e);
+        localStorage.removeItem(LOCAL_STORAGE_KEY_CONFIG);
+        setBroadcastError("Saved Telegram configuration was corrupted and has been cleared. Please re-enter your Bot Token and Channel ID.");
       }
     }
 
@@ -285,7 +287,8 @@ export default function App() {
       try {
         setSignals(JSON.parse(savedSignals));
       } catch (e) {
-        console.error("Failed to parse saved signals log", e);
+        console.error("Failed to parse saved signals log, removing corrupted entry", e);
+        localStorage.removeItem(LOCAL_STORAGE_KEY_SIGNALS);
       }
     }
   }, []);
