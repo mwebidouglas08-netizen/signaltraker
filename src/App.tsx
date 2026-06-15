@@ -295,8 +295,13 @@ export default function App() {
 
   // Persist State Updates
   const persistConfig = (newConfig: TelegramConfig) => {
-    setConfig(newConfig);
-    localStorage.setItem(LOCAL_STORAGE_KEY_CONFIG, JSON.stringify(newConfig));
+    const normalizedConfig = {
+      ...newConfig,
+      botToken: newConfig.botToken.trim(),
+      chatId: newConfig.chatId.trim(),
+    };
+    setConfig(normalizedConfig);
+    localStorage.setItem(LOCAL_STORAGE_KEY_CONFIG, JSON.stringify(normalizedConfig));
   };
 
   const persistSignals = (newSignals: TradingSignal[]) => {

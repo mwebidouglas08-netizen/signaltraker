@@ -8,6 +8,47 @@ interface Props {
   onChange: (newConfig: TelegramConfig) => void;
 }
 
+function sanitizeTelegramCredentials(botToken: string, chatId: string) {
+  let cleanToken = (botToken || "").trim();
+  let cleanChatId = (chatId || "").trim();
+
+  if (cleanToken.includes("telegram.org/bot")) {
+    const parts = cleanToken.split("telegram.org/bot");
+    if (parts.length > 1) {
+      const tokenPart = parts[1].split("/")[0];
+      if (tokenPart) cleanToken = tokenPart;
+    }
+  }
+
+  if (cleanToken.toLowerCase().startsWith("bot") && /^\d+:/.test(cleanToken.substring(3))) {
+    cleanToken = cleanToken.substring(3);
+  }
+
+  cleanToken = cleanToken.replace(/\s+/g, "");
+
+  if (cleanChatId.includes("t.me/")) {
+    const parts = cleanChatId.split("t.me/");
+    if (parts.length > 1) {
+      const handle = parts[1].split("/")[0].split("?")[0];
+      if (handle) {
+        cleanChatId = handle.startsWith("@") ? handle : "@" + handle;
+      }
+    }
+  }
+
+  cleanChatId = cleanChatId.replace(/\s+/g, "").replace(/['"]/g, "").replace(/\/$/, "");
+
+  if (/^\d{7,20}$/.test(cleanChatId)) {
+    cleanChatId = "-100" + cleanChatId;
+  } else if (/^-\d{7,20}$/.test(cleanChatId) && !cleanChatId.startsWith("-100")) {
+    cleanChatId = "-100" + cleanChatId.substring(1);
+  } else if (cleanChatId && !cleanChatId.startsWith("@") && !cleanChatId.startsWith("-") && isNaN(Number(cleanChatId))) {
+    cleanChatId = "@" + cleanChatId;
+  }
+
+  return { cleanToken, cleanChatId };
+}
+
 export default function TelegramConfigPanel({ config, onChange }: Props) {
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -36,21 +77,14 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
       return;
     }
 
+    const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(config.botToken, config.chatId);
+    if (!cleanToken || !cleanChatId) {
+      setErrorMessage("Unable to normalize the provided Telegram credentials. Please verify the values.");
+      setTestStatus("error");
+      return;
+    }
+
     setTestStatus("success");
-    
-    // Perform simple client-side sanitization
-    let cleanToken = config.botToken.trim();
-    let cleanChatId = config.chatId.trim();
-
-    if (cleanChatId && !cleanChatId.startsWith("@") && !cleanChatId.startsWith("-") && isNaN(Number(cleanChatId))) {
-      cleanChatId = "@" + cleanChatId;
-    }
-    if (/^\d{7,20}$/.test(cleanChatId)) {
-      cleanChatId = "-100" + cleanChatId;
-    } else if (/^-\d{7,20}$/.test(cleanChatId) && !cleanChatId.startsWith("-100")) {
-      cleanChatId = "-100" + cleanChatId.substring(1);
-    }
-
     setSuccessInfo({
       title: "Linked Successfully",
       id: cleanChatId,
@@ -66,10 +100,11 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
   };
 
   const saveConfig = (botToken: string, chatId: string) => {
+    const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(botToken, chatId);
     onChange({
       ...config,
-      botToken: botToken.trim(),
-      chatId: chatId.trim(),
+      botToken: cleanToken,
+      chatId: cleanChatId,
     });
   };
 
@@ -86,20 +121,21 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
     setSuccessInfo(null);
 
     try {
+      const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(config.botToken, config.chatId);
       const response = await fetch("/api/telegram/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          botToken: config.botToken,
-          chatId: config.chatId,
+          botToken: cleanToken,
+          chatId: cleanChatId,
         }),
       });
 
       const data = await response.json();
       
       // Update with sanitized credentials if returned to make the application self-correcting
-      const updatedBotToken = data.botToken || config.botToken;
-      const updatedChatId = data.chatId || config.chatId;
+      const updatedBotToken = data.botToken || cleanToken;
+      const updatedChatId = data.chatId || cleanChatId;
 
       if (!response.ok || !data.success) {
         // Update credentials even on error to let the user see how they were interpreted/cleaned
