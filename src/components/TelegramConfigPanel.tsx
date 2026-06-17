@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { TelegramConfig } from "../types";
-import { Send, CheckCircle2, AlertCircle, HelpCircle, Eye, EyeOff, Check, ArrowRight, PowerOff } from "lucide-react";
+import { Send, CheckCircle2, AlertCircle, HelpCircle, Eye, EyeOff, Check, PowerOff } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 interface Props {
@@ -8,41 +8,58 @@ interface Props {
   onChange: (newConfig: TelegramConfig) => void;
 }
 
+// ─── FIXED sanitizer ──────────────────────────────────────────────────────────
+// The old code tried to "auto-correct" channel IDs by adding/moving -100 prefix.
+// This caused malformed IDs like -1001001002590400274 (double-prefixed).
+// New rule: if the user provides a negative number, trust it exactly as-is.
+//           if they provide a positive number, add -100 prefix once.
+//           if they provide text, ensure @ prefix.
 function sanitizeTelegramCredentials(botToken: string, chatId: string) {
   let cleanToken = (botToken || "").trim();
-  let cleanChatId = (chatId || "").trim();
 
+  // Extract token from pasted full URL
   if (cleanToken.includes("telegram.org/bot")) {
     const parts = cleanToken.split("telegram.org/bot");
     if (parts.length > 1) {
-      const tokenPart = parts[1].split("/")[0];
-      if (tokenPart) cleanToken = tokenPart;
+      const tok = parts[1].split("/")[0];
+      if (tok) cleanToken = tok;
     }
   }
-
+  // Strip manual "bot" prefix
   if (cleanToken.toLowerCase().startsWith("bot") && /^\d+:/.test(cleanToken.substring(3))) {
     cleanToken = cleanToken.substring(3);
   }
-
   cleanToken = cleanToken.replace(/\s+/g, "");
 
+  let cleanChatId = (chatId || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/['"]/g, "")
+    .replace(/\/$/, "");
+
+  // Handle t.me links
   if (cleanChatId.includes("t.me/")) {
     const parts = cleanChatId.split("t.me/");
     if (parts.length > 1) {
-      const handle = parts[1].split("/")[0].split("?")[0];
-      if (handle) {
-        cleanChatId = handle.startsWith("@") ? handle : "@" + handle;
-      }
+      const handle = parts[parts.length - 1].split("/")[0].split("?")[0];
+      if (handle) cleanChatId = handle.startsWith("@") ? handle : "@" + handle;
     }
+    return { cleanToken, cleanChatId };
   }
 
-  cleanChatId = cleanChatId.replace(/\s+/g, "").replace(/['"]/g, "").replace(/\/$/, "");
+  // Negative number → trust it as-is (user copied directly from Telegram)
+  if (cleanChatId.startsWith("-") && /^-\d+$/.test(cleanChatId)) {
+    return { cleanToken, cleanChatId };
+  }
 
-  if (/^\d{7,20}$/.test(cleanChatId)) {
+  // Positive number → add -100 prefix exactly once
+  if (/^\d+$/.test(cleanChatId)) {
     cleanChatId = "-100" + cleanChatId;
-  } else if (/^-\d{7,20}$/.test(cleanChatId) && !cleanChatId.startsWith("-100")) {
-    cleanChatId = "-100" + cleanChatId.substring(1);
-  } else if (cleanChatId && !cleanChatId.startsWith("@") && !cleanChatId.startsWith("-") && isNaN(Number(cleanChatId))) {
+    return { cleanToken, cleanChatId };
+  }
+
+  // Alphanumeric username → ensure @ prefix
+  if (cleanChatId && !cleanChatId.startsWith("@")) {
     cleanChatId = "@" + cleanChatId;
   }
 
@@ -60,15 +77,10 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
     setTestStatus("idle");
     setErrorMessage("");
     setSuccessInfo(null);
-    onChange({
-      ...config,
-      botToken: "",
-      chatId: "",
-      isConnected: false,
-      chatTitle: "",
-    });
+    onChange({ ...config, botToken: "", chatId: "", isConnected: false, chatTitle: "" });
   };
 
+  // "Connect Bot" button: marks as connected without sending a test message
   const handleInstantConnect = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!config.botToken || !config.chatId) {
@@ -76,42 +88,31 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
       setTestStatus("error");
       return;
     }
-
     const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(config.botToken, config.chatId);
     if (!cleanToken || !cleanChatId) {
-      setErrorMessage("Unable to normalize the provided Telegram credentials. Please verify the values.");
+      setErrorMessage("Could not normalise credentials. Please check the values.");
       setTestStatus("error");
       return;
     }
-
     setTestStatus("success");
-    setSuccessInfo({
-      title: "Linked Successfully",
-      id: cleanChatId,
-    });
-
-    onChange({
-      ...config,
-      botToken: cleanToken,
-      chatId: cleanChatId,
-      isConnected: true,
-      chatTitle: config.chatTitle || "Linked Channel",
-    });
+    setSuccessInfo({ title: "Linked Successfully", id: cleanChatId });
+    onChange({ ...config, botToken: cleanToken, chatId: cleanChatId, isConnected: true, chatTitle: config.chatTitle || "Linked Channel" });
   };
 
-  const saveConfig = (botToken: string, chatId: string) => {
-    const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(botToken, chatId);
-    onChange({
-      ...config,
-      botToken: cleanToken,
-      chatId: cleanChatId,
-    });
+  // Update config state on every keystroke — DO NOT sanitize here to avoid mid-typing corruption
+  const handleTokenChange = (value: string) => {
+    onChange({ ...config, botToken: value });
   };
 
+  const handleChatIdChange = (value: string) => {
+    onChange({ ...config, chatId: value });
+  };
+
+  // "Send Test Message" button: sanitizes on submit then calls the API
   const handleTestConnection = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!config.botToken || !config.chatId) {
-      setErrorMessage("Please fill in both the Bot Token and Channel ID to run a test connection.");
+      setErrorMessage("Please fill in both the Bot Token and Channel ID.");
       setTestStatus("error");
       return;
     }
@@ -122,47 +123,35 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
 
     try {
       const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(config.botToken, config.chatId);
+
       const response = await fetch("/api/telegram/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          botToken: cleanToken,
-          chatId: cleanChatId,
-        }),
+        body: JSON.stringify({ botToken: cleanToken, chatId: cleanChatId }),
       });
 
+      // Safe JSON parsing: check content-type first
+      const ct = response.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const txt = await response.text();
+        throw new Error(`Server returned non-JSON response (HTTP ${response.status}). The API route may not be deployed yet. Preview: ${txt.substring(0, 150)}`);
+      }
+
       const data = await response.json();
-      
-      // Update with sanitized credentials if returned to make the application self-correcting
       const updatedBotToken = data.botToken || cleanToken;
       const updatedChatId = data.chatId || cleanChatId;
 
       if (!response.ok || !data.success) {
-        // Update credentials even on error to let the user see how they were interpreted/cleaned
-        onChange({
-          ...config,
-          botToken: updatedBotToken,
-          chatId: updatedChatId,
-          isConnected: false,
-        });
-        throw new Error(data.error || "Failed connection test");
+        onChange({ ...config, botToken: updatedBotToken, chatId: updatedChatId, isConnected: false });
+        throw new Error(data.error || "Connection test failed");
       }
 
       setTestStatus("success");
-      setSuccessInfo({
-        title: data.chatTitle,
-        id: updatedChatId,
-      });
-      onChange({
-        ...config,
-        botToken: updatedBotToken,
-        chatId: updatedChatId,
-        isConnected: true,
-        chatTitle: data.chatTitle,
-      });
+      setSuccessInfo({ title: data.chatTitle, id: updatedChatId });
+      onChange({ ...config, botToken: updatedBotToken, chatId: updatedChatId, isConnected: true, chatTitle: data.chatTitle });
     } catch (err: any) {
       setTestStatus("error");
-      setErrorMessage(err.message || "An unexpected error occurred during connection test.");
+      setErrorMessage(err.message || "An unexpected error occurred.");
       onChange({ ...config, isConnected: false });
     }
   };
@@ -195,39 +184,34 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden bg-slate-950/60 border border-slate-800/80 rounded-xl"
-            id="cfg-guide-content"
           >
             <div className="p-4 space-y-4 text-xs leading-relaxed text-slate-300">
-              <h3 className="font-semibold text-sky-400 text-sm flex items-center gap-1.5">
-                <span>⚡ How to get up and running in 3 minutes</span>
-              </h3>
+              <h3 className="font-semibold text-sky-400 text-sm">⚡ Connect in 3 steps</h3>
               <ol className="space-y-3.5 list-decimal pl-4">
                 <li>
-                  <strong className="text-slate-200">Generate Bot Token:</strong>
+                  <strong className="text-slate-200">Get Bot Token:</strong>
                   <div className="text-slate-400 mt-1">
-                    Open Telegram and search for <code className="text-sky-300 font-mono">@BotFather</code>. Send the command <code className="text-sky-300 font-mono">/newbot</code>, choose a display name, and select a username. Copy the long HTTP APIToken generated (looks like <code className="bg-slate-900 text-slate-300 px-1 rounded">123456789:ABCdefGhI...</code>).
+                    Open Telegram → search <code className="text-sky-300">@BotFather</code> → send <code className="text-sky-300">/newbot</code> → copy the token (e.g. <code className="bg-slate-900 text-slate-300 px-1 rounded">123456789:ABCdef...</code>).
                   </div>
                 </li>
                 <li>
-                  <strong className="text-slate-200">Prepare Telegram Channel:</strong>
-                  <div className="text-slate-400 mt-1">
-                    Create a public or private Telegram Channel.
+                  <strong className="text-slate-200">Add Bot as Channel Admin:</strong>
+                  <div className="text-amber-300 font-semibold mt-1">
+                    ⚠️ Channel Settings → Admins → Add Admin → find your bot → enable "Post Messages".
                   </div>
                 </li>
                 <li>
-                  <strong className="text-slate-200">Add Bot as Admin:</strong>
-                  <div className="text-slate-400 mt-1 font-semibold text-amber-300">
-                    ⚠️ CRITICAL STEP: Go to channel settings &rarr; Managing Admins &rarr; Add Admin &rarr; Search your Bot's username and add it as an Administrator. Make sure the "Post Messages" permission is turned ON.
-                  </div>
-                </li>
-                <li>
-                  <strong className="text-slate-200">Retrieve Channel ID:</strong>
+                  <strong className="text-slate-200">Get Channel ID:</strong>
                   <div className="text-slate-400 mt-1">
-                    - Public channel: Use your channel handle starting with <code className="text-sky-300 font-mono">@</code> (e.g. <code className="text-sky-300 font-mono">@my_trading_signals</code>).<br />
-                    - Private channel: Forward any post from your channel to <code className="text-sky-300 font-mono">@username_to_id_bot</code> or <code className="text-sky-300 font-mono">@idbot</code> to instantly retrieve the chat ID (typically structured like <code className="text-sky-300 font-mono">-1001234567890</code>).
+                    <b>Public channel:</b> use <code className="text-sky-300">@channelname</code><br />
+                    <b>Private channel:</b> Forward any post to <code className="text-sky-300">@username_to_id_bot</code> to get the ID.
+                    It looks like <code className="text-sky-300">-1001234567890</code> — paste it exactly as shown.
                   </div>
                 </li>
               </ol>
+              <div className="bg-amber-950/40 border border-amber-800/40 rounded-lg p-3 text-amber-200 text-[11px]">
+                <b>⚠️ Important:</b> Paste your Channel ID exactly as Telegram gives it — including the minus sign and all digits. Do not add or remove any characters.
+              </div>
             </div>
           </motion.div>
         )}
@@ -243,7 +227,7 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
             <input
               type={showToken ? "text" : "password"}
               value={config.botToken}
-              onChange={(e) => saveConfig(e.target.value, config.chatId)}
+              onChange={(e) => handleTokenChange(e.target.value)}
               placeholder="e.g. 1234567890:ABCdefGhIJKlmnoPQRstuvwxYZ"
               className="w-full px-3.5 py-2.5 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-100 placeholder-slate-600 outline-none transition-all pr-10 font-mono"
               required
@@ -253,7 +237,6 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
               type="button"
               onClick={() => setShowToken(!showToken)}
               className="absolute right-3 top-3 text-slate-500 hover:text-slate-300 transition-colors"
-              id="btn-toggle-token-visibility"
             >
               {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
             </button>
@@ -268,23 +251,24 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
           <input
             type="text"
             value={config.chatId}
-            onChange={(e) => saveConfig(config.botToken, e.target.value)}
-            placeholder="e.g. @yourchannel or -1001567890123"
+            onChange={(e) => handleChatIdChange(e.target.value)}
+            placeholder="e.g. @yourchannel  or  -1001234567890"
             className="w-full px-3.5 py-2.5 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-100 placeholder-slate-600 outline-none transition-all font-mono"
             required
             id="input-chat-id"
           />
+          <p className="text-[10px] text-slate-500 px-1">
+            Paste your Channel ID exactly as Telegram shows it. Do not add or remove characters.
+          </p>
         </div>
 
-        {/* Toggle options to turn on/off sharing of signals as requested by user */}
+        {/* Broadcast toggles */}
         <div className="bg-slate-950/80 p-4 border border-slate-800/80 rounded-xl space-y-3" id="toggle-broadcast-options">
           <h4 className="text-xs font-semibold text-sky-400 font-sans tracking-wide uppercase flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
             <span>Broadcast Sharing Control</span>
           </h4>
-          
           <div className="space-y-3">
-            {/* Toggle 1: Scanner Setup Alerts */}
             <div className="flex items-center justify-between gap-3 text-xs">
               <div className="space-y-0.5 max-w-[80%]">
                 <span className="font-semibold text-slate-200">1. Volatility Scanner Auto-Broadcast</span>
@@ -294,56 +278,34 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  onChange({
-                    ...config,
-                    enableScannerBroadcast: config.enableScannerBroadcast === false ? true : false
-                  });
-                }}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-slate-700/30 transition-colors duration-200 ease-in-out focus:outline-none ${
-                  config.enableScannerBroadcast !== false ? 'bg-sky-500' : 'bg-slate-800'
-                }`}
+                onClick={() => onChange({ ...config, enableScannerBroadcast: config.enableScannerBroadcast === false ? true : false })}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-slate-700/30 transition-colors duration-200 ease-in-out focus:outline-none ${config.enableScannerBroadcast !== false ? "bg-sky-500" : "bg-slate-800"}`}
                 id="toggle-scanner-sharing"
               >
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                    config.enableScannerBroadcast !== false ? 'translate-x-4' : 'translate-x-0'
-                  }`}
-                />
+                <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${config.enableScannerBroadcast !== false ? "translate-x-4" : "translate-x-0"}`} />
               </button>
             </div>
 
-            {/* Toggle 2: Manual Composer Signals */}
             <div className="flex items-center justify-between gap-3 text-xs pt-1 border-t border-slate-900">
               <div className="space-y-0.5 max-w-[80%]">
                 <span className="font-semibold text-slate-200">2. AI Signal Compiler Auto-Share</span>
                 <p className="text-[10px] text-slate-400 leading-normal">
-                  Enable immediate automatic broadcast of manually generated or compiled drafts without manual click approval.
+                  Enable immediate automatic broadcast of compiled drafts without manual approval.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  onChange({
-                    ...config,
-                    enableManualBroadcast: config.enableManualBroadcast === false ? true : false
-                  });
-                }}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-slate-700/30 transition-colors duration-200 ease-in-out focus:outline-none ${
-                  config.enableManualBroadcast !== false ? 'bg-sky-500' : 'bg-slate-800'
-                }`}
+                onClick={() => onChange({ ...config, enableManualBroadcast: config.enableManualBroadcast === false ? true : false })}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-slate-700/30 transition-colors duration-200 ease-in-out focus:outline-none ${config.enableManualBroadcast !== false ? "bg-sky-500" : "bg-slate-800"}`}
                 id="toggle-manual-sharing"
               >
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                    config.enableManualBroadcast !== false ? 'translate-x-4' : 'translate-x-0'
-                  }`}
-                />
+                <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${config.enableManualBroadcast !== false ? "translate-x-4" : "translate-x-0"}`} />
               </button>
             </div>
           </div>
         </div>
 
+        {/* Action buttons */}
         <div className="pt-2 flex flex-wrap gap-2.5 items-stretch sm:items-center">
           {!config.isConnected ? (
             <>
@@ -357,7 +319,6 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>Connect Bot</span>
               </button>
-
               <button
                 type="submit"
                 disabled={testStatus === "testing" || !config.botToken || !config.chatId}
@@ -391,12 +352,11 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
                 <PowerOff className="w-3.5 h-3.5" />
                 <span>Disconnect Channel</span>
               </button>
-
               <button
                 type="submit"
                 disabled={testStatus === "testing" || !config.botToken || !config.chatId}
                 className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:bg-slate-900 disabled:text-slate-500 border border-slate-700 hover:border-slate-600 font-medium text-xs rounded-xl cursor-pointer disabled:cursor-not-allowed transition-all font-sans"
-                id="btn-test-connection"
+                id="btn-test-connection-connected"
               >
                 {testStatus === "testing" ? (
                   <>
@@ -424,31 +384,27 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
           )}
         </div>
 
-        {/* Action feedback messaging */}
+        {/* Feedback banners */}
         <AnimatePresence mode="wait">
           {testStatus === "success" && successInfo && (
             <motion.div
-              initial={{ opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -5 }}
+              initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }}
               className="bg-emerald-950/40 border border-emerald-900/50 rounded-xl p-3.5 text-xs text-emerald-300 space-y-1"
               id="test-success-banner"
             >
               <div className="flex items-center gap-1.5 font-semibold">
                 <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Test Successful!</span>
+                <span>Connection Successful!</span>
               </div>
               <p className="text-slate-300">
-                A verification alert has been sent to channel <b>{successInfo.title}</b>. Your signals are ready to fly.
+                A verification message was sent to <b>{successInfo.title}</b>. Your signals are ready to broadcast.
               </p>
             </motion.div>
           )}
 
           {testStatus === "error" && (
             <motion.div
-              initial={{ opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -5 }}
+              initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }}
               className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-3.5 text-xs text-rose-300 space-y-1"
               id="test-error-banner"
             >
@@ -456,13 +412,11 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
                 <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
                 <span>Connection Failed</span>
               </div>
-              <p className="text-slate-300">
-                {errorMessage}
-              </p>
+              <p className="text-slate-300">{errorMessage}</p>
               <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-400 mt-2">
-                <li>Double check that the bot token is copied correctly from BotFather.</li>
-                <li>Ensure the bot is added to your channel as an <b>Admin</b> with <b>Post Messages</b> permission enabled.</li>
-                <li>Make sure the Channel ID is exact (including are prefix <code className="font-mono bg-slate-900 px-0.5 rounded">-100</code> for private ones).</li>
+                <li>Copy your bot token exactly from <b>@BotFather</b> with no spaces.</li>
+                <li>Add your bot as <b>Admin</b> in the channel with <b>Post Messages</b> enabled.</li>
+                <li>Paste the Channel ID exactly as Telegram shows it (e.g. <code className="font-mono bg-slate-900 px-0.5 rounded">-1001234567890</code>).</li>
               </ul>
             </motion.div>
           )}
