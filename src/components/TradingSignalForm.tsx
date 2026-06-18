@@ -110,10 +110,10 @@ export default function TradingSignalForm({
   const [derivBotName, setDerivBotName] = useState<string>(savedSite.botName || "USE SNIPPER KILLER BOT");
   const [derivEntryDigit, setDerivEntryDigit] = useState("9");
   const [derivConfidence, setDerivConfidence] = useState("85%");
-  const [derivPromoUrl, setDerivPromoUrl] = useState<string>(savedSite.promoUrl || "");
+  const [derivPromoUrl, setDerivPromoUrl] = useState<string>(savedSite.promoUrl || "http://kicktrade.site");
 
-  const [linkedSiteUrl, setLinkedSiteUrl] = useState<string>(savedSite.promoUrl || "");
-  const [detectedSiteName, setDetectedSiteName] = useState<string>(savedSite.siteName || "");
+  const [linkedSiteUrl, setLinkedSiteUrl] = useState<string>(savedSite.promoUrl || "http://kicktrade.site");
+  const [detectedSiteName, setDetectedSiteName] = useState<string>(savedSite.siteName || "kicktrade");
   const [detectedBots, setDetectedBots] = useState<string[]>(savedSite.bots || []);
   const [siteDetecting, setSiteDetecting] = useState(false);
   const [siteDetectError, setSiteDetectError] = useState("");
@@ -205,8 +205,8 @@ export default function TradingSignalForm({
   const [derivRiskManagement, setDerivRiskManagement] = useState(
     "• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs"
   );
-  const [derivBotSignature, setDerivBotSignature] = useState<string>(savedSite.botSignature || "");
-  const [derivHashtags, setDerivHashtags] = useState<string>(savedSite.hashtags || "#TradingSignal #Deriv #OverUnder");
+  const [derivBotSignature, setDerivBotSignature] = useState<string>(savedSite.botSignature || "kicktrade Over/Under Bot");
+  const [derivHashtags, setDerivHashtags] = useState<string>(savedSite.hashtags || "#TradingSignal #kicktrade #Signals");
 
   // --- OPTION 3: ALERT SEQUENCE MODE STATE ---
   const [seqSymbol, setSeqSymbol] = useState("VOLATILITY 100 INDEX");
