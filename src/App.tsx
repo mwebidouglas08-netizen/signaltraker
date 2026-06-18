@@ -293,6 +293,69 @@ export default function App() {
     }
   }, []);
 
+  // ── Auto-delete sent signals from Telegram 10 minutes after they were sent ──
+  // Prevents old signals from accumulating in the channel after they've already
+  // been acted on. Runs a periodic sweep every 30 seconds.
+  const AUTO_DELETE_AFTER_MS = 10 * 60 * 1000; // 10 minutes
+
+  useEffect(() => {
+    const sweepAndDelete = async () => {
+      const raw = localStorage.getItem(LOCAL_STORAGE_KEY_SIGNALS);
+      if (!raw) return;
+
+      let currentSignals: TradingSignal[];
+      try {
+        currentSignals = JSON.parse(raw);
+      } catch {
+        return;
+      }
+
+      const now = Date.now();
+      const due = currentSignals.filter((sig) => {
+        if (!sig.sentMessageId || !sig.botTokenUsed || !sig.chatIdUsed) return false;
+        const sentAt = new Date(sig.createdAt).getTime();
+        if (isNaN(sentAt)) return false;
+        return now - sentAt >= AUTO_DELETE_AFTER_MS;
+      });
+
+      if (due.length === 0) return;
+
+      for (const sig of due) {
+        try {
+          await fetch("/api/telegram/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              botToken: sig.botTokenUsed,
+              chatId: sig.chatIdUsed,
+              messageId: sig.sentMessageId,
+            }),
+          });
+        } catch (err) {
+          console.error(`Auto-delete failed for signal ${sig.id}:`, err);
+        }
+      }
+
+      // Remove the auto-deleted signals from local state + storage regardless of
+      // individual API outcomes (if Telegram already removed it, that's fine too)
+      const dueIds = new Set(due.map((s) => s.id));
+      setSignals((prev) => {
+        const remaining = prev.filter((s) => !dueIds.has(s.id));
+        localStorage.setItem(LOCAL_STORAGE_KEY_SIGNALS, JSON.stringify(remaining));
+        return remaining;
+      });
+    };
+
+    // Run an initial sweep shortly after mount, then every 30 seconds
+    const initialTimer = setTimeout(sweepAndDelete, 5000);
+    const intervalTimer = setInterval(sweepAndDelete, 30 * 1000);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(intervalTimer);
+    };
+  }, []);
+
   // Persist State Updates
   const persistConfig = (newConfig: TelegramConfig) => {
     const normalizedConfig = {
