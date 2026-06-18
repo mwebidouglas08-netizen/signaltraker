@@ -16,7 +16,7 @@ if (apiKey) {
   console.warn("WARNING: GEMINI_API_KEY not set");
 }
 
-// ─── Safe Telegram fetch (checks Content-Type before .json()) ─────────────────
+// ─── Safe Telegram fetch ──────────────────────────────────────────────────────
 async function safeTelegramFetch(
   url: string,
   options: RequestInit
@@ -32,22 +32,19 @@ async function safeTelegramFetch(
     const body = await response.text().catch(() => "(unreadable)");
     throw new Error(
       `Telegram API returned non-JSON (HTTP ${response.status}). ` +
-      `This means the server route is misconfigured. Preview: ${body.substring(0, 200)}`
+      `Server route may be misconfigured. Body: ${body.substring(0, 200)}`
     );
   }
   return response.json();
 }
 
-// ─── FIXED sanitizer ──────────────────────────────────────────────────────────
-// Rule: if the user typed a negative number, trust it as-is.
-//       if they typed a positive number, add -100 prefix.
-//       if they typed text, ensure @ prefix.
-// This prevents the old bug where -100 was added to IDs that already had it,
-// producing malformed IDs like -1001001002590400274.
+// ─── Channel ID sanitizer ─────────────────────────────────────────────────────
+// RULE: if user provides a negative number, trust it exactly.
+//       if positive digits, add -100 once.
+//       if text, add @ prefix.
 function sanitizeTelegramCredentials(botToken: string, chatId: string) {
-  let cleanToken = (botToken || "").trim();
+  let cleanToken = (botToken || "").trim().replace(/\s+/g, "");
 
-  // Extract token from full URL if pasted
   if (cleanToken.includes("telegram.org/bot")) {
     const parts = cleanToken.split("telegram.org/bot");
     if (parts.length > 1) {
@@ -55,20 +52,12 @@ function sanitizeTelegramCredentials(botToken: string, chatId: string) {
       if (tok) cleanToken = tok;
     }
   }
-  // Strip "bot" prefix if someone added it manually
   if (cleanToken.toLowerCase().startsWith("bot") && /^\d+:/.test(cleanToken.substring(3))) {
     cleanToken = cleanToken.substring(3);
   }
-  cleanToken = cleanToken.replace(/\s+/g, "");
 
-  // ── Channel ID sanitization ──
-  let cleanChatId = (chatId || "")
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/['"]/g, "")
-    .replace(/\/$/, "");
+  let cleanChatId = (chatId || "").trim().replace(/\s+/g, "").replace(/['"]/g, "").replace(/\/$/, "");
 
-  // Handle t.me links
   if (cleanChatId.includes("t.me/")) {
     const parts = cleanChatId.split("t.me/");
     if (parts.length > 1) {
@@ -78,19 +67,18 @@ function sanitizeTelegramCredentials(botToken: string, chatId: string) {
     return { cleanToken, cleanChatId };
   }
 
-  // Negative number: user-supplied ID with leading minus — trust it completely.
-  // This is the key fix: we no longer try to "correct" IDs that already start with -
+  // Negative number → trust exactly as-is
   if (cleanChatId.startsWith("-") && /^-\d+$/.test(cleanChatId)) {
     return { cleanToken, cleanChatId };
   }
 
-  // Positive number: bare channel ID — add the -100 prefix exactly once
+  // Positive number → add -100 prefix once
   if (/^\d+$/.test(cleanChatId)) {
     cleanChatId = "-100" + cleanChatId;
     return { cleanToken, cleanChatId };
   }
 
-  // Alphanumeric username: ensure @ prefix
+  // Username → ensure @ prefix
   if (cleanChatId && !cleanChatId.startsWith("@")) {
     cleanChatId = "@" + cleanChatId;
   }
@@ -108,15 +96,14 @@ function buildTelegramErrorAdvice(data: any, cleanChatId: string): string {
   const desc = (data.description || "").toLowerCase();
   if (desc.includes("chat not found")) {
     return (
-      `Channel not found for ID: ${cleanChatId}. ` +
-      `Make sure you copied the Channel ID exactly from Telegram. ` +
-      `For private channels use the numeric ID (e.g. -1001234567890). ` +
-      `For public channels use @username. ` +
-      `Also verify your bot is added as an Administrator with Post Messages enabled.`
+      `Telegram cannot find channel "${cleanChatId}". ` +
+      `Use the Auto-Detect button to find your correct Channel ID automatically, ` +
+      `or make sure your bot has been added to the channel as an Admin first, ` +
+      `then forward a message from the channel to @username_to_id_bot to get the exact ID.`
     );
   }
   if (desc.includes("admin") || desc.includes("post") || desc.includes("not member") || desc.includes("forbidden")) {
-    return `Bot lacks permission. Go to Channel Settings → Admins → Add Admin → select your Bot → enable "Post Messages".`;
+    return `Bot lacks permission. Go to Channel Settings → Admins → Add Admin → select your bot → enable "Post Messages".`;
   }
   if (desc.includes("unauthorized") || desc.includes("token")) {
     return `Invalid Bot Token. Copy it exactly from @BotFather — it looks like 1234567890:ABCdef...`;
@@ -160,6 +147,135 @@ app.post("/api/login", (req, res) => {
   }
 });
 
+// ─── NEW: Verify bot token and discover channels it has access to ──────────────
+// Calls getMe (validate token) + getUpdates (find channels the bot was added to)
+app.post("/api/telegram/discover", async (req, res) => {
+  const { botToken } = req.body;
+  if (!botToken) {
+    res.status(400).json({ error: "botToken is required" });
+    return;
+  }
+
+  const { cleanToken } = sanitizeTelegramCredentials(botToken, "placeholder");
+  console.log(`[Telegram/discover] token=${maskToken(cleanToken)}`);
+
+  try {
+    // Step 1: validate the token
+    const meData = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getMe`, { method: "GET" }
+    );
+
+    if (!meData.ok) {
+      res.status(400).json({
+        error: `Invalid bot token: ${meData.description || "Unauthorized"}. Get a fresh token from @BotFather.`,
+        tokenValid: false,
+      });
+      return;
+    }
+
+    const botInfo = meData.result;
+
+    // Step 2: get recent updates to find channels the bot has been added to
+    const updatesData = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getUpdates?limit=100&allowed_updates=["my_chat_member","channel_post","message"]`,
+      { method: "GET" }
+    );
+
+    const channels: Array<{ id: string; title: string; type: string; username?: string }> = [];
+    const seen = new Set<string>();
+
+    if (updatesData.ok && Array.isArray(updatesData.result)) {
+      for (const update of updatesData.result) {
+        // Channel posts
+        const chat =
+          update.channel_post?.chat ||
+          update.my_chat_member?.chat ||
+          update.message?.chat ||
+          update.edited_channel_post?.chat;
+
+        if (chat && !seen.has(String(chat.id))) {
+          seen.add(String(chat.id));
+          const chatId = String(chat.id);
+          channels.push({
+            id: chatId,
+            title: chat.title || chat.username || chatId,
+            type: chat.type,
+            username: chat.username ? "@" + chat.username : undefined,
+          });
+        }
+      }
+    }
+
+    res.json({
+      tokenValid: true,
+      botName: botInfo.first_name,
+      botUsername: "@" + botInfo.username,
+      channels,
+      hint: channels.length === 0
+        ? "No channels found in recent updates. Make sure you added the bot as Admin to your channel and sent at least one message there, then try again."
+        : `Found ${channels.length} channel(s). Select yours below.`,
+    });
+  } catch (err: any) {
+    console.error(`[Telegram/discover] ${err?.message}`);
+    res.status(500).json({ error: err.message || "Discovery failed" });
+  }
+});
+
+// ─── NEW: Verify a specific channel ID directly with getChat ──────────────────
+app.post("/api/telegram/verify-chat", async (req, res) => {
+  const { botToken, chatId } = req.body;
+  if (!botToken || !chatId) {
+    res.status(400).json({ error: "botToken and chatId are required" });
+    return;
+  }
+
+  const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(botToken, chatId);
+
+  try {
+    const data = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getChat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: cleanChatId }),
+      }
+    );
+
+    if (!data.ok) {
+      // Try alternative ID formats automatically
+      const alternatives: string[] = [];
+      
+      // If they gave us -1002590400274, also try stripping -100 and re-adding
+      if (cleanChatId.startsWith("-100")) {
+        const bare = cleanChatId.substring(4); // strip -100
+        alternatives.push("-" + bare); // try without the 00 part
+      }
+
+      res.status(400).json({
+        found: false,
+        error: data.description,
+        chatId: cleanChatId,
+        alternatives,
+        advice: buildTelegramErrorAdvice(data, cleanChatId),
+      });
+      return;
+    }
+
+    const chat = data.result;
+    res.json({
+      found: true,
+      chatId: String(chat.id),
+      title: chat.title || chat.username,
+      type: chat.type,
+      username: chat.username ? "@" + chat.username : null,
+      memberCount: chat.member_count,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Telegram test (send verification message) ───────────────────────────────
 app.post("/api/telegram/test", async (req, res) => {
   const { botToken, chatId } = req.body;
   if (!botToken || !chatId) {
@@ -171,9 +287,31 @@ app.post("/api/telegram/test", async (req, res) => {
   console.log(`[Telegram/test] chatId=${cleanChatId} token=${maskToken(cleanToken)}`);
 
   try {
+    // First verify the chat is reachable
+    const chatCheck = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getChat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: cleanChatId }),
+      }
+    );
+
+    if (!chatCheck.ok) {
+      res.status(400).json({
+        error: buildTelegramErrorAdvice(chatCheck, cleanChatId),
+        raw: chatCheck,
+        botToken: cleanToken,
+        chatId: cleanChatId,
+      });
+      return;
+    }
+
+    const chatTitle = chatCheck.result?.title || chatCheck.result?.username || "Channel";
+
     const text =
       `<b>📣 Signal Broadcaster Connected!</b>\n\n` +
-      `Your dashboard is now linked to this channel. ` +
+      `Your dashboard is now linked to <b>${chatTitle}</b>.\n` +
       `Trading alerts will be delivered here automatically.\n\n` +
       `⏱️ <i>Verified: ${new Date().toUTCString()}</i>`;
 
@@ -187,7 +325,12 @@ app.post("/api/telegram/test", async (req, res) => {
     );
 
     if (!data.ok) {
-      res.status(400).json({ error: buildTelegramErrorAdvice(data, cleanChatId), raw: data, botToken: cleanToken, chatId: cleanChatId });
+      res.status(400).json({
+        error: buildTelegramErrorAdvice(data, cleanChatId),
+        raw: data,
+        botToken: cleanToken,
+        chatId: cleanChatId,
+      });
       return;
     }
 
@@ -195,7 +338,7 @@ app.post("/api/telegram/test", async (req, res) => {
       success: true,
       message: "Test signal sent successfully!",
       messageId: data.result.message_id,
-      chatTitle: data.result.chat?.title || "Channel",
+      chatTitle,
       botToken: cleanToken,
       chatId: cleanChatId,
     });
@@ -205,6 +348,7 @@ app.post("/api/telegram/test", async (req, res) => {
   }
 });
 
+// ─── Send signal ─────────────────────────────────────────────────────────────
 app.post("/api/telegram/send", async (req, res) => {
   const { botToken, chatId, text, replyToMessageId } = req.body;
   if (!botToken || !chatId || !text) {
@@ -229,7 +373,7 @@ app.post("/api/telegram/send", async (req, res) => {
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
     );
 
-    // Fallback: retry as plain text if HTML parse fails
+    // Retry as plain text if HTML parse fails
     if (!data.ok && (data.description || "").toLowerCase().includes("parse")) {
       const plain = text.replace(/<[^>]*>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
       const fallback = { ...payload, text: plain };
@@ -259,6 +403,7 @@ app.post("/api/telegram/send", async (req, res) => {
   }
 });
 
+// ─── Gemini signal generation ─────────────────────────────────────────────────
 app.post("/api/gemini/generate-signal", async (req, res) => {
   if (!ai) {
     res.status(500).json({ error: "Gemini AI not configured. Add GEMINI_API_KEY to Vercel environment variables." });
@@ -330,5 +475,121 @@ Use only Telegram HTML tags. Output ONLY JSON: {"signal":"...","rationale":"..."
   }
 });
 
-// Export for Vercel serverless — no app.listen() here
 export default app;
+
+// ─── NEW: Scrape linked site to detect its name and bots ─────────────────────
+app.post("/api/site/detect", async (req, res) => {
+  const { siteUrl } = req.body;
+  if (!siteUrl) {
+    res.status(400).json({ error: "siteUrl is required" });
+    return;
+  }
+
+  let url = siteUrl.trim();
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    url = "https://" + url;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; SignalBot/1.0)",
+        "Accept": "text/html,application/xhtml+xml",
+      },
+    });
+    clearTimeout(timeout);
+
+    const html = await response.text();
+
+    // ── Extract site name ──
+    let siteName = "";
+    const titleMatch = html.match(/<title[^>]*>([^<]{1,120})<\/title>/i);
+    if (titleMatch) siteName = titleMatch[1].replace(/\s+/g, " ").trim();
+
+    const ogSiteMatch = html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']{1,80})["']/i)
+      || html.match(/<meta[^>]+content=["']([^"']{1,80})["'][^>]+property=["']og:site_name["']/i);
+    if (ogSiteMatch) siteName = ogSiteMatch[1].trim();
+
+    const h1Match = html.match(/<h1[^>]*>([^<]{1,80})<\/h1>/i);
+    if (!siteName && h1Match) siteName = h1Match[1].replace(/<[^>]*>/g, "").trim();
+
+    if (!siteName) {
+      try { siteName = new URL(url).hostname.replace(/^www\./, ""); } catch { siteName = url; }
+    }
+
+    // ── Extract bots / tools mentioned on the page ──
+    // Look for bot names in headings, strong tags, links with common bot keywords
+    const botPatterns = [
+      // Named bot patterns (e.g. "Sniper Bot", "Killer Bot", "Auto Trader")
+      /\b([A-Z][a-zA-Z0-9\s]{2,30}(?:Bot|Robot|Trader|EA|Expert|Signal|Auto|Sniper|Killer|Hunter|Scanner|Copier|Algo))\b/g,
+      // All-caps bot names (e.g. "SNIPPER KILLER BOT")
+      /\b([A-Z][A-Z0-9\s]{3,40}(?:BOT|ROBOT|TRADER|EA|SIGNAL|AUTO|SNIPER|KILLER))\b/g,
+    ];
+
+    const rawBots = new Set<string>();
+
+    // Search in headings, strong, button elements specifically
+    const tagContents = [
+      ...Array.from(html.matchAll(/<(?:h[1-6]|strong|b|button|a|span|p)[^>]*>([^<]{5,120})<\/(?:h[1-6]|strong|b|button|a|span|p)>/gi)).map(m => m[1]),
+    ];
+
+    for (const content of tagContents) {
+      const cleaned = content.replace(/&#?\w+;/g, " ").replace(/<[^>]*>/g, "").trim();
+      for (const pattern of botPatterns) {
+        pattern.lastIndex = 0;
+        let m;
+        while ((m = pattern.exec(cleaned)) !== null) {
+          const candidate = m[1].trim();
+          if (candidate.length > 3 && candidate.length < 60) {
+            rawBots.add(candidate);
+          }
+        }
+      }
+    }
+
+    // Also check the full page text for bot names
+    const plainText = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+    for (const pattern of botPatterns) {
+      pattern.lastIndex = 0;
+      let m;
+      while ((m = pattern.exec(plainText)) !== null) {
+        const candidate = m[1].trim();
+        if (candidate.length > 3 && candidate.length < 60) {
+          rawBots.add(candidate);
+        }
+      }
+    }
+
+    // Deduplicate: remove substrings that are fully contained in a longer bot name
+    const botsArr = Array.from(rawBots);
+    const dedupedBots = botsArr.filter(
+      (b) => !botsArr.some((other) => other !== b && other.toLowerCase().includes(b.toLowerCase()) && other.length > b.length)
+    ).slice(0, 12); // max 12 bots
+
+    // ── Extract OG description ──
+    let description = "";
+    const descMatch = html.match(/<meta[^>]+(?:name=["']description["']|property=["']og:description["'])[^>]+content=["']([^"']{1,300})["']/i)
+      || html.match(/<meta[^>]+content=["']([^"']{1,300})["'][^>]+(?:name=["']description["']|property=["']og:description["'])/i);
+    if (descMatch) description = descMatch[1].trim();
+
+    res.json({
+      success: true,
+      siteUrl: url,
+      siteName,
+      description,
+      bots: dedupedBots,
+      botCount: dedupedBots.length,
+    });
+  } catch (err: any) {
+    const isTimeout = err.name === "AbortError";
+    res.status(isTimeout ? 408 : 500).json({
+      error: isTimeout
+        ? "Request timed out. The site took too long to respond."
+        : `Failed to reach the site: ${err.message}`,
+    });
+  }
+});
