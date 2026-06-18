@@ -102,19 +102,31 @@ export default function TradingSignalForm({
   const [derivAction, setDerivAction] = useState("UNDER 7");
   const [derivStrategy, setDerivStrategy] = useState("Second Least Digit");
   const [derivTicks, setDerivTicks] = useState("1ticks");
-  const [derivBotName, setDerivBotName] = useState("USE SNIPPER KILLER BOT");
+  // ── Persisted site config — read from localStorage so changes survive reloads ──
+  const savedSite = (() => {
+    try { return JSON.parse(localStorage.getItem("signal_site_config") || "{}"); } catch { return {}; }
+  })();
+
+  const [derivBotName, setDerivBotName] = useState<string>(savedSite.botName || "USE SNIPPER KILLER BOT");
   const [derivEntryDigit, setDerivEntryDigit] = useState("9");
   const [derivConfidence, setDerivConfidence] = useState("85%");
-  const [derivPromoUrl, setDerivPromoUrl] = useState("https://mrzetuzetu.site");
+  const [derivPromoUrl, setDerivPromoUrl] = useState<string>(savedSite.promoUrl || "");
 
-  // ── Site-link detection state ──
-  const [linkedSiteUrl, setLinkedSiteUrl] = useState("https://mrzetuzetu.site");
-  const [detectedSiteName, setDetectedSiteName] = useState("mrzetuzetu");
-  const [detectedBots, setDetectedBots] = useState<string[]>(["USE SNIPPER KILLER BOT"]);
+  const [linkedSiteUrl, setLinkedSiteUrl] = useState<string>(savedSite.promoUrl || "");
+  const [detectedSiteName, setDetectedSiteName] = useState<string>(savedSite.siteName || "");
+  const [detectedBots, setDetectedBots] = useState<string[]>(savedSite.bots || []);
   const [siteDetecting, setSiteDetecting] = useState(false);
   const [siteDetectError, setSiteDetectError] = useState("");
-  const [siteDetectSuccess, setSiteDetectSuccess] = useState("");
+  const [siteDetectSuccess, setSiteDetectSuccess] = useState(savedSite.siteName ? `✅ Using: "${savedSite.siteName}"` : "");
   const [showBotPicker, setShowBotPicker] = useState(false);
+
+  // Persist site config to localStorage whenever key fields change
+  const persistSiteConfig = (updates: Record<string, any>) => {
+    try {
+      const current = JSON.parse(localStorage.getItem("signal_site_config") || "{}");
+      localStorage.setItem("signal_site_config", JSON.stringify({ ...current, ...updates }));
+    } catch {}
+  };
 
   const handleDetectSite = async () => {
     if (!linkedSiteUrl.trim()) {
@@ -139,28 +151,50 @@ export default function TradingSignalForm({
         throw new Error(data.error || "Failed to detect site.");
       }
 
-      setDetectedSiteName(data.siteName || linkedSiteUrl);
-      setDerivPromoUrl(data.siteUrl);
-
+      const siteName = data.siteName || linkedSiteUrl;
+      const siteUrl = data.siteUrl;
       const bots: string[] = data.bots && data.bots.length > 0
         ? data.bots
-        : [`USE ${(data.siteName || "SITE").toUpperCase().replace(/[^A-Z0-9\s]/g, "").trim()} BOT`];
+        : [];
 
+      const safeName = siteName.replace(/[^A-Za-z0-9\s]/g, "").trim();
+      const newSignature = `${siteName} Signal Bot`;
+      const newHashtags = `#TradingSignal #${safeName.replace(/\s+/g, "")} #Signals`;
+      const newBotName = bots.length === 1
+        ? `USE ${bots[0].toUpperCase()}`
+        : bots.length > 1
+          ? derivBotName // keep current until user picks
+          : `USE ${safeName.toUpperCase().slice(0, 20)} BOT`;
+
+      // Update all related state
+      setDetectedSiteName(siteName);
       setDetectedBots(bots);
+      setDerivPromoUrl(siteUrl);
+      setDerivBotSignature(newSignature);
+      setDerivHashtags(newHashtags);
 
-      // Auto-populate fields with detected site info
-      setDerivBotSignature(`${data.siteName} Signal Bot`);
-      setDerivHashtags(`#TradingSignal #${(data.siteName || "Trading").replace(/\s+/g, "")} #Signals`);
+      // Persist everything to localStorage so it survives page reloads
+      persistSiteConfig({
+        siteName,
+        promoUrl: siteUrl,
+        bots,
+        botSignature: newSignature,
+        hashtags: newHashtags,
+        botName: bots.length === 1 ? `USE ${bots[0].toUpperCase()}` : derivBotName,
+      });
 
       if (bots.length === 1) {
-        // Auto-select if only one bot found
-        setDerivBotName(`USE ${bots[0].toUpperCase()}`);
-        setSiteDetectSuccess(`✅ Site detected: "${data.siteName}" with 1 bot auto-selected.`);
+        const autoBot = `USE ${bots[0].toUpperCase()}`;
+        setDerivBotName(autoBot);
+        persistSiteConfig({ botName: autoBot });
+        setSiteDetectSuccess(`✅ Site: "${siteName}" — bot "${bots[0]}" auto-selected.`);
       } else if (bots.length > 1) {
         setShowBotPicker(true);
-        setSiteDetectSuccess(`✅ Site detected: "${data.siteName}" — ${bots.length} bots found. Pick one below.`);
+        setSiteDetectSuccess(`✅ Site: "${siteName}" — ${bots.length} bots found. Pick one below.`);
       } else {
-        setSiteDetectSuccess(`✅ Site detected: "${data.siteName}". No specific bots found — enter bot name manually.`);
+        setDerivBotName(newBotName);
+        persistSiteConfig({ botName: newBotName });
+        setSiteDetectSuccess(`✅ Site: "${siteName}" detected. No specific bots found — using generated name.`);
       }
     } catch (err: any) {
       setSiteDetectError(err.message || "Detection failed. Check the URL and try again.");
@@ -171,8 +205,8 @@ export default function TradingSignalForm({
   const [derivRiskManagement, setDerivRiskManagement] = useState(
     "• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs"
   );
-  const [derivBotSignature, setDerivBotSignature] = useState("mrzetuzetu Over/Under Bot");
-  const [derivHashtags, setDerivHashtags] = useState("#TradingSignal #Deriv #OverUnder");
+  const [derivBotSignature, setDerivBotSignature] = useState<string>(savedSite.botSignature || "");
+  const [derivHashtags, setDerivHashtags] = useState<string>(savedSite.hashtags || "#TradingSignal #Deriv #OverUnder");
 
   // --- OPTION 3: ALERT SEQUENCE MODE STATE ---
   const [seqSymbol, setSeqSymbol] = useState("VOLATILITY 100 INDEX");
@@ -183,8 +217,7 @@ export default function TradingSignalForm({
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `⏳ <b>Preparing</b> an upcoming trade setup on <b>VOLATILITY 100 INDEX</b>.\n` +
     `📢 <b>Bot Settings:</b> Second Least Digit Pattern\n` +
-    `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>\n\n` +
-    `🖥️ https://www.mrzetuzetu.site`
+    `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>`
   );
   const [seqActiveSignal, setSeqActiveSignal] = useState(
     `🔔 <b>ACTIVE TRADING SETUP BROADCAST</b> 🔔\n` +
@@ -192,8 +225,7 @@ export default function TradingSignalForm({
     `📈 <b>Asset:</b> VOLATILITY 100 INDEX\n` +
     `📊 <b>Contract:</b> UNDER 7\n` +
     `⚡ <b>Strategy:</b> Second Least Digit\n\n` +
-    `🎯 Entry trigger active! Execute with correct risk models.\n` +
-    `🖥️ https://www.mrzetuzetu.site`
+    `🎯 Entry trigger active! Execute with correct risk models.`
   );
   const [seqPostSignal, setSeqPostSignal] = useState(
     `⌛ <b>COOLDOWN & NEXT READY</b> ⌛\n` +
@@ -252,7 +284,7 @@ export default function TradingSignalForm({
     return localStorage.getItem("hq_current_channels") || "Telegram Main Channel";
   });
   const [hqCurrentRecipients, setHqCurrentRecipients] = useState(() => {
-    return localStorage.getItem("hq_current_recipients") || "@mrzetuzetu_signals, #members-dashboard";
+    return localStorage.getItem("hq_current_recipients") || "@signals_feed, #members-dashboard";
   });
 
   // Alert Going to be Sent (Column 3)
@@ -269,7 +301,7 @@ export default function TradingSignalForm({
     return localStorage.getItem("hq_going_channels") || "Telegram Main Channel, Discord Feed";
   });
   const [hqGoingRecipients, setHqGoingRecipients] = useState(() => {
-    return localStorage.getItem("hq_going_recipients") || "@mrzetuzetu_signals, #cooldown_tracker";
+    return localStorage.getItem("hq_going_recipients") || "@signals_feed, #cooldown_tracker";
   });
 
   // General Settings Optional
@@ -295,16 +327,14 @@ export default function TradingSignalForm({
         `━━━━━━━━━━━━━━━━━━━━━━\n` +
         `⏳ <b>Preparing</b> an upcoming trade setup on <b>VOLATILITY 100 INDEX</b>.\n` +
         `📢 <b>Bot Settings:</b> Second Least Digit Pattern\n` +
-        `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>\n\n` +
-        `🖥️ https://www.mrzetuzetu.site`,
+        `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>`,
       activeSignal:
         `🔔 <b>ACTIVE TRADING SETUP BROADCAST</b> 🔔\n` +
         `━━━━━━━━━━━━━━━━━━━━━━\n` +
         `📈 <b>Asset:</b> VOLATILITY 100 INDEX\n` +
         `📊 <b>Contract:</b> UNDER 7\n` +
         `⚡ <b>Strategy:</b> Second Least Digit\n\n` +
-        `🎯 Entry trigger active! Execute with correct risk models.\n` +
-        `🖥️ https://www.mrzetuzetu.site`,
+        `🎯 Entry trigger active! Execute with correct risk models.`,
       postSignal:
         `⌛ <b>COOLDOWN & NEXT READY</b> ⌛\n` +
         `━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -512,13 +542,13 @@ export default function TradingSignalForm({
       setHqCurrentTrigger("Active Setup Triggered: Digit 9 prints on last tick. Contract UNDER 7 active.");
       setHqCurrentAddInfo("Martingale multiplier v2 activated. Maximum target depth set to 3 recovery steps.");
       setHqCurrentChannels("Telegram Main Channel");
-      setHqCurrentRecipients("@mrzetuzetu_signals, #members-dashboard");
+      setHqCurrentRecipients("@signals_feed, #members-dashboard");
 
       setHqGoingTrigger("Final session cooldown alert and performance metrics overview.");
       setHqGoingAddInfo("Total gain for sequence block is stable. Standby for next system scan cycle.");
       setHqGoingSendTime("2026-06-07T14:30");
       setHqGoingChannels("Telegram Main Channel, Discord Feed");
-      setHqGoingRecipients("@mrzetuzetu_signals, #cooldown_tracker");
+      setHqGoingRecipients("@signals_feed, #cooldown_tracker");
 
       setHqTags("deriv, volatility100, second_least_digit, zeta");
       setHqNotes("Always monitor the base index on Deriv SmartTrader before starting the automatic bot loop.");
@@ -600,13 +630,13 @@ export default function TradingSignalForm({
   };
 
   const handleRecompileSequence = () => {
+    const promoLine = derivPromoUrl ? `\n🖥️ ${derivPromoUrl}` : "";
     setSeqPreSignal(
       `🚨 <b>STANDBY ALERT TO MEMBERS</b> 🚨\n` +
       `━━━━━━━━━━━━━━━━━━━━━━\n` +
       `⏳ <b>Preparing</b> an upcoming trade setup on <b>${seqSymbol.toUpperCase()}</b>.\n` +
       `📢 <b>Bot Settings:</b> ${seqStrategy}\n` +
-      `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>\n\n` +
-      `🖥️ https://www.mrzetuzetu.site`
+      `⚡ <i>Standby and prepare your balance! We either go home or go hard. No risk no Ferrari!</i>${promoLine}`
     );
     setSeqActiveSignal(
       `🔔 <b>ACTIVE TRADING SETUP BROADCAST</b> 🔔\n` +
@@ -614,8 +644,7 @@ export default function TradingSignalForm({
       `📈 <b>Asset:</b> ${seqSymbol.toUpperCase()}\n` +
       `📊 <b>Contract:</b> ${seqAction.toUpperCase()}\n` +
       `⚡ <b>Strategy:</b> ${seqStrategy}\n\n` +
-      `🎯 Entry trigger active! Execute with correct risk models.\n` +
-      `🖥️ https://www.mrzetuzetu.site`
+      `🎯 Entry trigger active! Execute with correct risk models.${promoLine}`
     );
     setSeqPostSignal(
       `⌛ <b>COOLDOWN & NEXT READY</b> ⌛\n` +
@@ -856,26 +885,20 @@ export default function TradingSignalForm({
       setDerivAction("UNDER 7");
       setDerivStrategy("Second Least Digit");
       setDerivTicks("1ticks");
-      setDerivBotName("USE SNIPPER KILLER BOT");
       setDerivEntryDigit("9");
       setDerivConfidence("85%");
-      setDerivPromoUrl("https://mrzetuzetu.site");
       setDerivRiskManagement("• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs");
-      setDerivBotSignature("mrzetuzetu Over/Under Bot");
-      setDerivHashtags("#TradingSignal #Deriv #OverUnder");
+      // NOTE: bot name, promo URL, signature, hashtags are NOT reset here —
+      // they come from the linked site config the user set via Detect Site.
     } else if (type === "deriv_odds") {
       setFormMode("deriv");
       setDerivSymbol("VOLATILITY 75 INDEX");
       setDerivAction("OVER 5");
       setDerivStrategy("Tick Oscillator Breakout");
       setDerivTicks("5ticks");
-      setDerivBotName("USE DERIV SNIPER BOT v4");
       setDerivEntryDigit("2");
       setDerivConfidence("92%");
-      setDerivPromoUrl("https://mrzetuzetu.site");
       setDerivRiskManagement("• Target maximum 3 sessions per day\n• Set stake at 1% of total bank capital\n• Pause immediately on trade loss");
-      setDerivBotSignature("mrzetuzetu Premium Ticks Bot");
-      setDerivHashtags("#VolatilityIdx #DerivDigits #OverUnder");
     } else if (type === "crypto") {
       setFormMode("classic");
       setAssetClass("Crypto");
@@ -1121,7 +1144,7 @@ export default function TradingSignalForm({
                 <input
                   type="url"
                   value={linkedSiteUrl}
-                  onChange={(e) => { setLinkedSiteUrl(e.target.value); setSiteDetectError(""); setSiteDetectSuccess(""); }}
+                  onChange={(e) => { setLinkedSiteUrl(e.target.value); setSiteDetectError(""); setSiteDetectSuccess(""); persistSiteConfig({ promoUrl: e.target.value }); }}
                   placeholder="e.g. https://yoursite.com"
                   className="flex-1 px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-xl text-sky-300 placeholder-slate-600 outline-none font-mono"
                   id="input-linked-site-url"
@@ -1168,7 +1191,9 @@ export default function TradingSignalForm({
                         key={idx}
                         type="button"
                         onClick={() => {
-                          setDerivBotName(`USE ${bot.toUpperCase()}`);
+                          const selected = `USE ${bot.toUpperCase()}`;
+                          setDerivBotName(selected);
+                          persistSiteConfig({ botName: selected });
                           setShowBotPicker(false);
                           setSiteDetectSuccess(`✅ Bot selected: "${bot}" from ${detectedSiteName}`);
                         }}
@@ -1205,7 +1230,7 @@ export default function TradingSignalForm({
                 <input
                   type="text"
                   value={derivBotName}
-                  onChange={(e) => setDerivBotName(e.target.value)}
+                  onChange={(e) => { setDerivBotName(e.target.value); persistSiteConfig({ botName: e.target.value }); }}
                   placeholder="e.g. USE SNIPPER KILLER BOT"
                   className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-100 placeholder-slate-650 outline-none font-semibold text-yellow-300"
                   id="deriv-bot-name-input"
@@ -1231,7 +1256,7 @@ export default function TradingSignalForm({
                 <input
                   type="url"
                   value={derivPromoUrl}
-                  onChange={(e) => setDerivPromoUrl(e.target.value)}
+                  onChange={(e) => { setDerivPromoUrl(e.target.value); persistSiteConfig({ promoUrl: e.target.value }); }}
                   placeholder="e.g. https://yoursite.com"
                   className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-350 placeholder-slate-650 outline-none font-mono"
                   id="deriv-promo-url-input"
@@ -1259,8 +1284,8 @@ export default function TradingSignalForm({
                 <input
                   type="text"
                   value={derivBotSignature}
-                  onChange={(e) => setDerivBotSignature(e.target.value)}
-                  placeholder="e.g. mrzetuzetu Over/Under Bot"
+                  onChange={(e) => { setDerivBotSignature(e.target.value); persistSiteConfig({ botSignature: e.target.value }); }}
+                  placeholder="e.g. MySite Over/Under Bot"
                   className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-100 outline-none"
                   id="deriv-signature-input"
                 />
@@ -1270,7 +1295,7 @@ export default function TradingSignalForm({
                 <input
                   type="text"
                   value={derivHashtags}
-                  onChange={(e) => setDerivHashtags(e.target.value)}
+                  onChange={(e) => { setDerivHashtags(e.target.value); persistSiteConfig({ hashtags: e.target.value }); }}
                   placeholder="#TradingSignal #Deriv #OverUnder"
                   className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-405 placeholder-slate-650 outline-none font-mono"
                   id="deriv-hashtags-input"
