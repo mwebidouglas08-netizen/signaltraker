@@ -419,9 +419,9 @@ app.post("/api/gemini/generate-signal", async (req, res) => {
     botName = "USE SNIPPER KILLER BOT",
     entryDigit = "9",
     confidence = "85%",
-    promoUrl = "https://mrzetuzetu.site",
+    promoUrl = "http://kicktrade.site",
     riskGuidelines = "• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs",
-    botSignature = "mrzetuzetu Over/Under Bot",
+    botSignature = "kicktrade Over/Under Bot",
     hashtags = "#TradingSignal #Deriv #OverUnder",
   } = req.body;
 
