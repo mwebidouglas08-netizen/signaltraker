@@ -106,6 +106,68 @@ export default function TradingSignalForm({
   const [derivEntryDigit, setDerivEntryDigit] = useState("9");
   const [derivConfidence, setDerivConfidence] = useState("85%");
   const [derivPromoUrl, setDerivPromoUrl] = useState("https://mrzetuzetu.site");
+
+  // ── Site-link detection state ──
+  const [linkedSiteUrl, setLinkedSiteUrl] = useState("https://mrzetuzetu.site");
+  const [detectedSiteName, setDetectedSiteName] = useState("mrzetuzetu");
+  const [detectedBots, setDetectedBots] = useState<string[]>(["USE SNIPPER KILLER BOT"]);
+  const [siteDetecting, setSiteDetecting] = useState(false);
+  const [siteDetectError, setSiteDetectError] = useState("");
+  const [siteDetectSuccess, setSiteDetectSuccess] = useState("");
+  const [showBotPicker, setShowBotPicker] = useState(false);
+
+  const handleDetectSite = async () => {
+    if (!linkedSiteUrl.trim()) {
+      setSiteDetectError("Please enter a site URL first.");
+      return;
+    }
+    setSiteDetecting(true);
+    setSiteDetectError("");
+    setSiteDetectSuccess("");
+    setShowBotPicker(false);
+
+    try {
+      const response = await fetch("/api/site/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ siteUrl: linkedSiteUrl.trim() }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to detect site.");
+      }
+
+      setDetectedSiteName(data.siteName || linkedSiteUrl);
+      setDerivPromoUrl(data.siteUrl);
+
+      const bots: string[] = data.bots && data.bots.length > 0
+        ? data.bots
+        : [`USE ${(data.siteName || "SITE").toUpperCase().replace(/[^A-Z0-9\s]/g, "").trim()} BOT`];
+
+      setDetectedBots(bots);
+
+      // Auto-populate fields with detected site info
+      setDerivBotSignature(`${data.siteName} Signal Bot`);
+      setDerivHashtags(`#TradingSignal #${(data.siteName || "Trading").replace(/\s+/g, "")} #Signals`);
+
+      if (bots.length === 1) {
+        // Auto-select if only one bot found
+        setDerivBotName(`USE ${bots[0].toUpperCase()}`);
+        setSiteDetectSuccess(`✅ Site detected: "${data.siteName}" with 1 bot auto-selected.`);
+      } else if (bots.length > 1) {
+        setShowBotPicker(true);
+        setSiteDetectSuccess(`✅ Site detected: "${data.siteName}" — ${bots.length} bots found. Pick one below.`);
+      } else {
+        setSiteDetectSuccess(`✅ Site detected: "${data.siteName}". No specific bots found — enter bot name manually.`);
+      }
+    } catch (err: any) {
+      setSiteDetectError(err.message || "Detection failed. Check the URL and try again.");
+    } finally {
+      setSiteDetecting(false);
+    }
+  };
   const [derivRiskManagement, setDerivRiskManagement] = useState(
     "• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs"
   );
@@ -1047,6 +1109,95 @@ export default function TradingSignalForm({
               </div>
             </div>
 
+            {/* ── Site Link & Auto-Detection ── */}
+            <div className="bg-slate-950/80 border border-sky-900/30 rounded-xl p-4 space-y-3" id="site-detection-block">
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse"></span>
+                <span className="text-xs font-semibold text-sky-400">Linked Trading Site</span>
+                <span className="text-[10px] text-slate-500">— paste your site URL to auto-detect its name and available bots</span>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={linkedSiteUrl}
+                  onChange={(e) => { setLinkedSiteUrl(e.target.value); setSiteDetectError(""); setSiteDetectSuccess(""); }}
+                  placeholder="e.g. https://yoursite.com"
+                  className="flex-1 px-3 py-2 text-xs bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-xl text-sky-300 placeholder-slate-600 outline-none font-mono"
+                  id="input-linked-site-url"
+                />
+                <button
+                  type="button"
+                  onClick={handleDetectSite}
+                  disabled={siteDetecting || !linkedSiteUrl.trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer disabled:cursor-not-allowed shrink-0"
+                  id="btn-detect-site"
+                >
+                  {siteDetecting ? (
+                    <svg className="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                  )}
+                  <span>{siteDetecting ? "Detecting..." : "Detect Site"}</span>
+                </button>
+              </div>
+
+              {siteDetectError && (
+                <p className="text-[11px] text-rose-400 flex items-center gap-1">
+                  <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  {siteDetectError}
+                </p>
+              )}
+
+              {siteDetectSuccess && (
+                <p className="text-[11px] text-emerald-400 font-medium">{siteDetectSuccess}</p>
+              )}
+
+              {/* Bot picker dropdown when multiple bots detected */}
+              {showBotPicker && detectedBots.length > 1 && (
+                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden" id="bot-picker-dropdown">
+                  <div className="px-3 py-2 border-b border-slate-800 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                    {detectedBots.length} Bots detected on <span className="text-sky-400">{detectedSiteName}</span> — select one:
+                  </div>
+                  <div className="divide-y divide-slate-900 max-h-40 overflow-y-auto">
+                    {detectedBots.map((bot, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setDerivBotName(`USE ${bot.toUpperCase()}`);
+                          setShowBotPicker(false);
+                          setSiteDetectSuccess(`✅ Bot selected: "${bot}" from ${detectedSiteName}`);
+                        }}
+                        className="w-full text-left px-3 py-2.5 hover:bg-slate-800/60 transition-colors group"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-yellow-300 font-semibold group-hover:text-white">{bot}</span>
+                          <span className="text-[9px] text-slate-500 group-hover:text-slate-300">SELECT →</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {detectedSiteName && siteDetectSuccess && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] text-slate-500">Site:</span>
+                  <span className="text-[10px] font-semibold text-white bg-slate-800 px-2 py-0.5 rounded">{detectedSiteName}</span>
+                  {detectedBots.length > 0 && (
+                    <>
+                      <span className="text-[10px] text-slate-500">Active Bot:</span>
+                      <span className="text-[10px] font-semibold text-yellow-300 bg-slate-800 px-2 py-0.5 rounded font-mono">{derivBotName}</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Snipper Bot recommendation code */}
               <div className="space-y-1.5">
@@ -1081,7 +1232,7 @@ export default function TradingSignalForm({
                   type="url"
                   value={derivPromoUrl}
                   onChange={(e) => setDerivPromoUrl(e.target.value)}
-                  placeholder="e.g. https://mrzetuzetu.site"
+                  placeholder="e.g. https://yoursite.com"
                   className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-350 placeholder-slate-650 outline-none font-mono"
                   id="deriv-promo-url-input"
                 />
