@@ -475,6 +475,41 @@ Use only Telegram HTML tags. Output ONLY JSON: {"signal":"...","rationale":"..."
   }
 });
 
+// ─── Delete a sent Telegram message (used for auto-delete after N minutes) ────
+app.post("/api/telegram/delete", async (req, res) => {
+  const { botToken, chatId, messageId } = req.body;
+  if (!botToken || !chatId || !messageId) {
+    res.status(400).json({ error: "botToken, chatId, and messageId are required" });
+    return;
+  }
+
+  const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(botToken, chatId);
+
+  try {
+    const data = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/deleteMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: cleanChatId, message_id: Number(messageId) }),
+      }
+    );
+
+    if (!data.ok) {
+      // Telegram returns ok:false if message was already deleted or too old (>48h) — treat as success either way
+      const desc = (data.description || "").toLowerCase();
+      const alreadyGone = desc.includes("message to delete not found") || desc.includes("message can't be deleted");
+      res.json({ success: alreadyGone, alreadyGone, error: data.description });
+      return;
+    }
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error(`[Telegram/delete] ${err?.message}`);
+    res.status(500).json({ error: err.message || "Failed to delete message" });
+  }
+});
+
 export default app;
 
 // ─── NEW: Scrape linked site to detect its name and bots ─────────────────────
