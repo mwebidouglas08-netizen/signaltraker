@@ -45,6 +45,29 @@ interface Props {
   onPostDirectTelegram: (text: string) => Promise<{ success: boolean; messageId?: string; error?: string }>;
 }
 
+// ── Read persisted site config set by TradingSignalForm ──────────────────────
+function getSiteConfig() {
+  try {
+    const raw = localStorage.getItem("signal_site_config");
+    const cfg = raw ? JSON.parse(raw) : {};
+    return {
+      siteName: cfg.siteName || "kicktrade",
+      promoUrl: cfg.promoUrl || "http://kicktrade.site",
+      botName: cfg.botName || "USE KICKTRADE BOT",
+      botSignature: cfg.botSignature || "kicktrade Over/Under Bot",
+      hashtags: cfg.hashtags || "#TradingSignal #kicktrade #Signals",
+    };
+  } catch {
+    return {
+      siteName: "kicktrade",
+      promoUrl: "http://kicktrade.site",
+      botName: "USE KICKTRADE BOT",
+      botSignature: "kicktrade Over/Under Bot",
+      hashtags: "#TradingSignal #kicktrade #Signals",
+    };
+  }
+}
+
 interface MarketIndex {
   id: string;
   name: string;
@@ -556,16 +579,16 @@ export default function VolatilityScanner({
     const warningMsg = `📡 [Pre-Signal Alert] Sending upcoming trade warning alert to the Telegram channel...`;
     setAutoLog((prev) => [warningMsg, ...prev.slice(0, 49)]);
 
-    let alertText = `🚨 <b>ALERT TO ALL DBOT.SITE MEMBERS  🚨</b>\n\n`;
+    let alertText = `🚨 <b>ALERT TO ALL ${getSiteConfig().siteName.toUpperCase()} MEMBERS  🚨</b>\n\n`;
     alertText += `⚠ In just a few minutes, a new signal will be sent!\n`;
     alertText += `📢 <b>Be ready and standby!</b>\n\n`;
-    alertText += `🖥 <b>Go to:</b> http://kicktrade.site/\n`;
-    alertText += `🤖 <b>Load your bot:</b> <code>dbot sv 1</code>\n\n`;
+    alertText += `🖥 <b>Go to:</b> ${getSiteConfig().promoUrl}\n`;
+    alertText += `🤖 <b>Load your bot:</b> <code>${getSiteConfig().botName}</code>\n\n`;
     alertText += `✅ Make sure your settings are ready…\n`;
     alertText += `🚀 Let’s catch this trade together!\n\n`;
-    alertText += `#StayAlert #kicktradesignal 🔥📈 🔥 We either go home or go hard 💸\n`;
+    alertText += `#StayAlert #${getSiteConfig().siteName.replace(/\s+/g, '').toLowerCase()}signal 🔥📈 🔥 We either go home or go hard 💸\n`;
     alertText += `No risk no Ferrari 🚀\n`;
-    alertText += `http://kicktrade.site`;
+    alertText += `${getSiteConfig().promoUrl}`;
 
     if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
       if (!configRef.current.botToken || !configRef.current.chatId) {
@@ -722,8 +745,8 @@ export default function VolatilityScanner({
       feeText += `💪 Losses are part of the game. Let's recover in the next high-probability cycle!\n`;
     }
     
-    feeText += `💻 <b>Link:</b> http://kicktrade.site\n\n`;
-    feeText += `#kicktradesignal #dbot #Deriv`;
+    feeText += `💻 <b>Link:</b> ${getSiteConfig().promoUrl}\n\n`;
+    feeText += `#${getSiteConfig().siteName.replace(/\s+/g, '').toLowerCase()}signal #${getSiteConfig().siteName.replace(/\s+/g, '')} #Deriv`;
 
     return { text: feeText, isWin, winRate };
   };
@@ -794,15 +817,16 @@ export default function VolatilityScanner({
       const nextTimeFormatted = `${hours}:${minutesStr} ${ampm}`;
 
       // Create a single combined message containing BOTH the trade results and next signal schedule info to prevent double messages
+      const siteCfg = getSiteConfig();
       const singleCombinedMessage = `${feedbackText}\n\n` +
         `⏰ <b>𝐍𝐄𝐗𝐓 𝐒𝐈𝐆𝐍𝐀𝐋 𝐀𝐋𝐄𝐑𝐓!</b> ⏰\n\n` +
         `Always remember poverty is the biggest enemy....🔥🫸🔥\n` +
-        `🔥 <b>dbot sv 1 bot</b> , we catch <b>${nextTimeFormatted}</b> for another powerful signal!\n` +
+        `🔥 <b>${siteCfg.botName}</b> , we catch <b>${nextTimeFormatted}</b> for another powerful signal!\n` +
         `(Over/under)\n\n` +
-        `💻 Make sure you're on http://kicktrade.site\n` +
+        `💻 Make sure you're on ${siteCfg.promoUrl}\n` +
         `🤖 Bot ready ➕ Focused ➕ Active\n` +
         `💰 Let's trade and make that money together! 🤑📈\n\n` +
-        `#zetuzetu.site Moves #maziwa Time 💸`;
+        `#${siteCfg.siteName.replace(/\s+/g, "")} Moves #NextSignal Time 💸`;
 
       if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
         try {
@@ -978,6 +1002,7 @@ export default function VolatilityScanner({
   }, [strongestMarket, isRunning, scannerState, minStrengthThreshold, broadcastFrequency]);
 
   const compileTemplateSignal = (m: MarketIndex) => {
+    const siteCfg = getSiteConfig();
     let html = `<b>🔔 NEW TRADING SIGNAL 🔔</b>\n\n`;
     html += `<b>${m.name.toUpperCase()}</b>\n\n`;
     html += `📈 <b>${m.action.toUpperCase()}</b>\n`;
@@ -985,11 +1010,11 @@ export default function VolatilityScanner({
     html += `📊 <b>Market Analysis (${m.ticks})</b>\n`;
     html += `━━━━━━━━━\n`;
     html += `🎯 <b>Entry Instructions:</b>\n\n`;
-    html += `<b>USE SNIPPER KILLER BOT</b>\n`;
+    html += `<b>${siteCfg.botName}</b>\n`;
     html += `💹 <b>Trade:</b> ${m.action}\n`;
     html += `🔑 <b>Entry Digit:</b> <code>${m.entryDigit}</code>\n`;
     html += `⭐ <b>Confidence:</b> ${m.strength}%\n\n`;
-    html += `http://kicktrade.site\n\n`;
+    html += `${siteCfg.promoUrl}\n\n`;
     html += `📈 <b>Session Stats:</b>\n\n`;
     html += `⚠️ <b>Risk Management:</b>\n`;
     html += `• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs\n\n`;
@@ -997,8 +1022,8 @@ export default function VolatilityScanner({
     const now = new Date();
     const timeStr = `${now.getMonth() + 1}/${now.getDate()}/${String(now.getFullYear()).substring(2)}, ${now.toLocaleTimeString("en-US")} UTC`;
     html += `⏰ <b>Time:</b> ${timeStr}\n\n`;
-    html += `🤖 Generated by kicktrade Over/Under Bot\n`;
-    html += `#TradingSignal #Deriv #OverUnder`;
+    html += `🤖 Generated by ${siteCfg.botSignature}\n`;
+    html += siteCfg.hashtags;
 
     return html;
   };
@@ -1034,6 +1059,7 @@ export default function VolatilityScanner({
       let finalRationale = "";
 
       if (isAiCompositionRef.current && aiConfigured) {
+        const siteCfg = getSiteConfig();
         const response = await fetch("/api/gemini/generate-signal", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1046,13 +1072,13 @@ export default function VolatilityScanner({
             isDerivStyle: true,
             strategyName: targetMarket.strategy,
             ticksCount: targetMarket.ticks,
-            botName: "USE SNIPPER KILLER BOT",
+            botName: siteCfg.botName,
             entryDigit: targetMarket.entryDigit,
             confidence: `${targetMarket.strength}%`,
-            promoUrl: "http://kicktrade.site",
+            promoUrl: siteCfg.promoUrl,
             riskGuidelines: "• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs",
-            botSignature: "kicktrade Over/Under Bot",
-            hashtags: "#TradingSignal #Deriv #OverUnder"
+            botSignature: siteCfg.botSignature,
+            hashtags: siteCfg.hashtags
           })
         });
 
