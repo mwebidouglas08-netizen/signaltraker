@@ -33,6 +33,7 @@ interface AutoBroadcastStatus {
   lastSentMessageId?: string | null;
   lastError?: string | null;
   totalSent?: number;
+  persistenceMode?: string;
 }
 
 function getSiteConfigLocal() {
@@ -186,19 +187,43 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
 
         <p className="text-[11px] text-slate-400 leading-relaxed">
           By default, signal broadcasting runs inside your browser tab and <b className="text-amber-400">stops when you log out or close the app</b>.
-          Enable this to move broadcasting to the server — signals keep sending automatically around the clock, even while you're offline.
+          Enable this to move broadcasting to the server — signals keep sending automatically around the clock, even while your device is off or disconnected.
           It only stops if you click <b className="text-rose-400">Disconnect</b> below or disconnect your Telegram bot.
         </p>
 
-        <div className="flex items-start gap-1.5 text-[10.5px] text-sky-300 bg-sky-950/30 border border-sky-900/40 rounded-lg p-2.5">
-          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <span>
-            One-time setup required (already included in your repo as <code className="bg-slate-900 px-1 rounded font-mono">.github/workflows/auto-broadcast-cron.yml</code>):
-            go to your GitHub repo → <b>Settings → Secrets and variables → Actions</b> → add a secret named{" "}
-            <code className="bg-slate-900 px-1 rounded font-mono">APP_URL</code> with your deployed app's URL
-            (e.g. <code className="bg-slate-900 px-1 rounded font-mono">https://your-app.vercel.app</code>).
-            GitHub will then ping the broadcast endpoint every 2 minutes for free — independent of your browser, login state, and Vercel's cron limits.
-          </span>
+        {serverStatus?.persistenceMode === "memory-fallback-not-persistent" && (
+          <div className="flex items-start gap-1.5 text-[10.5px] text-rose-300 bg-rose-950/30 border border-rose-900/40 rounded-lg p-2.5">
+            <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>
+              <b>⚠️ Storage not configured yet.</b> The server is using temporary memory that resets between requests, so "enabled" will not actually
+              stay on. Complete <b>Step 1</b> below (Vercel KV) before enabling — this is required, not optional.
+            </span>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <div className="flex items-start gap-1.5 text-[10.5px] text-sky-300 bg-sky-950/30 border border-sky-900/40 rounded-lg p-2.5">
+            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>
+              <b>Step 1 — Persistent storage (required, ~2 min):</b> In your Vercel dashboard, open your project →{" "}
+              <b>Storage</b> tab → <b>Create Database</b> → choose <b>KV</b> → connect it to this project.
+              Vercel automatically adds <code className="bg-slate-900 px-1 rounded font-mono">KV_REST_API_URL</code> and{" "}
+              <code className="bg-slate-900 px-1 rounded font-mono">KV_REST_API_TOKEN</code> as environment variables — no manual entry needed.
+              Redeploy after connecting it. Without this step, the server forgets that auto-broadcast is enabled almost immediately.
+            </span>
+          </div>
+
+          <div className="flex items-start gap-1.5 text-[10.5px] text-sky-300 bg-sky-950/30 border border-sky-900/40 rounded-lg p-2.5">
+            <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>
+              <b>Step 2 — External pinger (required):</b> Go to{" "}
+              <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="underline text-sky-200">cron-job.org</a>{" "}
+              (free, no card needed) → create an account → add a new cron job with URL{" "}
+              <code className="bg-slate-900 px-1 rounded font-mono">https://your-app.vercel.app/api/cron/auto-broadcast</code>{" "}
+              set to run every 1 minute. This pings your server reliably within seconds — unlike GitHub Actions schedules, which can be delayed by 15–60+ minutes
+              and are sometimes skipped entirely.
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center justify-between gap-3 p-3 bg-slate-900/40 border border-slate-850 rounded-xl">
