@@ -1,0 +1,62 @@
+name: Auto-Broadcast Signal Trigger
+
+# This workflow keeps your Telegram bot sending signals even after you log out
+# of the app or close your browser. GitHub's servers run this on a schedule
+# completely independently of your app session — it requires no third-party
+# service and no Vercel plan upgrade.
+#
+# SETUP (one-time):
+# 1. Go to your GitHub repo → Settings → Secrets and variables → Actions
+# 2. Click "New repository secret"
+# 3. Name:  APP_URL
+#    Value: https://your-deployed-app.vercel.app   (no trailing slash)
+# 4. (Optional but recommended) If you set CRON_SECRET in Vercel's
+#    environment variables, also add a secret here named CRON_SECRET
+#    with the same value, so only this workflow can trigger broadcasts.
+# 5. Commit this file. Go to the "Actions" tab in GitHub and confirm the
+#    "Auto-Broadcast Signal Trigger" workflow appears and is enabled.
+#
+# That's it — signals will now keep sending every 2 minutes, 24/7, even
+# while you are completely logged out of the app.
+
+on:
+  schedule:
+    # Runs every 2 minutes. GitHub Actions free tier supports this on
+    # public repos unconditionally, and on private repos within the
+    # free included minutes (this job uses well under 1 minute per run).
+    - cron: "*/2 * * * *"
+  workflow_dispatch: {} # allows manually triggering a test run from the Actions tab
+
+jobs:
+  trigger-broadcast:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping auto-broadcast endpoint
+        run: |
+          if [ -z "${{ secrets.APP_URL }}" ]; then
+            echo "❌ APP_URL secret is not set. Go to repo Settings → Secrets and variables → Actions and add APP_URL with your deployed app's URL."
+            exit 1
+          fi
+
+          if [ -n "${{ secrets.CRON_SECRET }}" ]; then
+            AUTH_HEADER="Authorization: Bearer ${{ secrets.CRON_SECRET }}"
+          else
+            AUTH_HEADER="X-No-Auth: true"
+          fi
+
+          echo "Pinging ${{ secrets.APP_URL }}/api/cron/auto-broadcast ..."
+
+          HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" \
+            -H "$AUTH_HEADER" \
+            "${{ secrets.APP_URL }}/api/cron/auto-broadcast")
+
+          echo "HTTP Status: $HTTP_STATUS"
+          echo "Response body:"
+          cat response.txt
+
+          if [ "$HTTP_STATUS" -ge 400 ]; then
+            echo "⚠️ Request failed with status $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo "✅ Cron trigger completed successfully."
