@@ -514,20 +514,19 @@ app.post("/api/telegram/delete", async (req, res) => {
 // Problem this solves: the old scanner ran entirely in the browser tab via
 // setInterval/setTimeout. Closing the tab or logging out killed those timers,
 // so signals stopped. This section moves the broadcast loop to the server,
-// driven by Vercel Cron (see vercel.json), so it runs independently of any
-// open browser session. It only stops when the bot is disconnected manually
-// (autoBroadcastEnabled set to false) — exactly as requested.
+// triggered by an external pinger (see SETUP.md), so it runs independently of
+// any open browser session. It only stops when the bot is disconnected
+// manually (autoBroadcastEnabled set to false) — exactly as requested.
 //
-// NOTE: Vercel's filesystem is ephemeral between invocations in some plans.
-// For production-grade persistence, swap writeState/readState for a real
-// datastore (e.g. Vercel KV, Upstash Redis, or a database). This file-based
-// version works for typical Vercel deployments using the /tmp directory or a
-// mounted persistent volume, and is a drop-in upgrade path.
-import fs from "fs";
-import os from "os";
-import pathMod from "path";
-
-const STATE_FILE = pathMod.join(os.tmpdir(), "signal_broadcaster_state.json");
+// CRITICAL FIX: Vercel serverless functions are STATELESS — each invocation
+// can run on a different physical machine, so writing to the local disk
+// (fs.writeFileSync to /tmp) does NOT reliably persist between requests.
+// That was the root cause of "enabled" silently resetting to false. This
+// version uses Vercel KV (a free, durable Redis store built into your
+// Vercel account) so the config actually persists across every invocation.
+const KV_URL = process.env.KV_REST_API_URL;
+const KV_TOKEN = process.env.KV_REST_API_TOKEN;
+const KV_STATE_KEY = "signal_broadcaster_state";
 
 interface AutoBroadcastState {
   enabled: boolean;
@@ -567,23 +566,56 @@ const DEFAULT_STATE: AutoBroadcastState = {
   totalSent: 0,
 };
 
-function readState(): AutoBroadcastState {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const raw = fs.readFileSync(STATE_FILE, "utf-8");
-      return { ...DEFAULT_STATE, ...JSON.parse(raw) };
-    }
-  } catch (e) {
-    console.error("[AutoBroadcast] Failed to read state file:", e);
+// In-memory fallback ONLY used if KV env vars are missing (e.g. local dev
+// without KV configured). This will NOT persist across serverless cold
+// starts in production — it exists purely so the app doesn't crash, and to
+// make the missing-KV condition visible via /api/autobroadcast/status.
+let memoryFallbackState: AutoBroadcastState | null = null;
+
+async function readState(): Promise<AutoBroadcastState> {
+  if (!KV_URL || !KV_TOKEN) {
+    console.warn("[AutoBroadcast] KV_REST_API_URL / KV_REST_API_TOKEN not set — using non-persistent memory fallback. See SETUP.md.");
+    return memoryFallbackState ? { ...DEFAULT_STATE, ...memoryFallbackState } : { ...DEFAULT_STATE };
   }
-  return { ...DEFAULT_STATE };
+
+  try {
+    const res = await fetch(`${KV_URL}/get/${KV_STATE_KEY}`, {
+      headers: { Authorization: `Bearer ${KV_TOKEN}` },
+    });
+    if (!res.ok) {
+      console.error(`[AutoBroadcast] KV read failed: HTTP ${res.status}`);
+      return { ...DEFAULT_STATE };
+    }
+    const data = await res.json();
+    if (!data.result) return { ...DEFAULT_STATE };
+    const parsed = typeof data.result === "string" ? JSON.parse(data.result) : data.result;
+    return { ...DEFAULT_STATE, ...parsed };
+  } catch (e) {
+    console.error("[AutoBroadcast] KV read error:", e);
+    return { ...DEFAULT_STATE };
+  }
 }
 
-function writeState(state: AutoBroadcastState) {
+async function writeState(state: AutoBroadcastState): Promise<void> {
+  if (!KV_URL || !KV_TOKEN) {
+    memoryFallbackState = state;
+    return;
+  }
+
   try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state), "utf-8");
+    const res = await fetch(`${KV_URL}/set/${KV_STATE_KEY}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${KV_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(JSON.stringify(state)),
+    });
+    if (!res.ok) {
+      console.error(`[AutoBroadcast] KV write failed: HTTP ${res.status}`);
+    }
   } catch (e) {
-    console.error("[AutoBroadcast] Failed to write state file:", e);
+    console.error("[AutoBroadcast] KV write error:", e);
   }
 }
 
@@ -626,8 +658,8 @@ function buildServerSignal(state: AutoBroadcastState) {
 }
 
 // ── Get current auto-broadcast state (used by the frontend to show status) ──
-app.get("/api/autobroadcast/status", (_req, res) => {
-  const state = readState();
+app.get("/api/autobroadcast/status", async (_req, res) => {
+  const state = await readState();
   res.json({
     enabled: state.enabled,
     siteName: state.siteName,
@@ -638,18 +670,19 @@ app.get("/api/autobroadcast/status", (_req, res) => {
     lastSentMessageId: state.lastSentMessageId,
     lastError: state.lastError,
     totalSent: state.totalSent,
+    persistenceMode: KV_URL && KV_TOKEN ? "kv" : "memory-fallback-not-persistent",
   });
 });
 
 // ── Enable/configure server-side auto-broadcast (survives logout/tab close) ──
-app.post("/api/autobroadcast/configure", (req, res) => {
+app.post("/api/autobroadcast/configure", async (req, res) => {
   const {
     enabled, botToken, chatId, chatTitle,
     siteName, promoUrl, botName, botSignature, hashtags,
     minStrengthThreshold, activeContracts, intervalMinutes,
   } = req.body;
 
-  const current = readState();
+  const current = await readState();
   const next: AutoBroadcastState = {
     ...current,
     enabled: typeof enabled === "boolean" ? enabled : current.enabled,
@@ -671,25 +704,32 @@ app.post("/api/autobroadcast/configure", (req, res) => {
     return;
   }
 
-  writeState(next);
+  if (!KV_URL || !KV_TOKEN) {
+    res.status(500).json({
+      error: "Persistent storage (Vercel KV) is not configured on the server. Auto-broadcast cannot reliably survive logout without it. See SETUP.md to provision Vercel KV (free, ~2 minutes).",
+    });
+    return;
+  }
+
+  await writeState(next);
   console.log(`[AutoBroadcast] Configured. enabled=${next.enabled} chatId=${next.chatId} interval=${next.intervalMinutes}min`);
   res.json({ success: true, state: next });
 });
 
 // ── Manually disconnect / stop server-side auto-broadcast ──────────────────
-app.post("/api/autobroadcast/disable", (_req, res) => {
-  const current = readState();
+app.post("/api/autobroadcast/disable", async (_req, res) => {
+  const current = await readState();
   const next = { ...current, enabled: false };
-  writeState(next);
+  await writeState(next);
   console.log("[AutoBroadcast] Manually disabled.");
   res.json({ success: true });
 });
 
-// ── Cron entrypoint — called automatically by Vercel Cron every minute ──────
+// ── Cron entrypoint — called by an external pinger every 1-2 minutes ────────
 // This is what keeps signals flowing even when nobody has the app open.
-// Vercel Cron is configured in vercel.json to hit this route on a schedule.
+// See SETUP.md for how to point a free external scheduler at this route.
 app.get("/api/cron/auto-broadcast", async (req, res) => {
-  // Optional: protect with a secret so only Vercel Cron (or you) can trigger it
+  // Optional: protect with a secret so only your scheduler (or you) can trigger it
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = req.headers["authorization"];
@@ -699,7 +739,15 @@ app.get("/api/cron/auto-broadcast", async (req, res) => {
     }
   }
 
-  const state = readState();
+  if (!KV_URL || !KV_TOKEN) {
+    res.status(500).json({
+      skipped: true,
+      error: "Persistent storage (Vercel KV) is not configured. Auto-broadcast state cannot be read reliably. See SETUP.md.",
+    });
+    return;
+  }
+
+  const state = await readState();
 
   if (!state.enabled || !state.botToken || !state.chatId) {
     res.json({ skipped: true, reason: "Auto-broadcast is disabled or not configured." });
@@ -731,7 +779,7 @@ app.get("/api/cron/auto-broadcast", async (req, res) => {
 
     if (!data.ok) {
       const updated = { ...state, lastRunAt: new Date().toISOString(), lastError: data.description || "Send failed" };
-      writeState(updated);
+      await writeState(updated);
       res.status(400).json({ success: false, error: data.description });
       return;
     }
@@ -743,21 +791,19 @@ app.get("/api/cron/auto-broadcast", async (req, res) => {
       lastError: null,
       totalSent: state.totalSent + 1,
     };
-    writeState(updated);
+    await writeState(updated);
 
     console.log(`[AutoBroadcast] Signal sent. messageId=${data.result.message_id} totalSent=${updated.totalSent}`);
     res.json({ success: true, messageId: data.result.message_id, totalSent: updated.totalSent });
   } catch (err: any) {
     const updated = { ...state, lastRunAt: new Date().toISOString(), lastError: err.message };
-    writeState(updated);
+    await writeState(updated);
     console.error(`[AutoBroadcast] Error: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-export default app;
-
-// ─── NEW: Scrape linked site to detect its name and bots ─────────────────────
+// ─── Scrape linked site to detect its name and bots ───────────────────────────
 app.post("/api/site/detect", async (req, res) => {
   const { siteUrl } = req.body;
   if (!siteUrl) {
@@ -873,3 +919,5 @@ app.post("/api/site/detect", async (req, res) => {
     });
   }
 });
+
+export default app;
