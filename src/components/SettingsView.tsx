@@ -193,9 +193,11 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
         <div className="flex items-start gap-1.5 text-[10.5px] text-sky-300 bg-sky-950/30 border border-sky-900/40 rounded-lg p-2.5">
           <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span>
-            One-time setup required: point a free scheduler (e.g. cron-job.org) at{" "}
-            <code className="bg-slate-900 px-1 rounded font-mono">your-domain.vercel.app/api/cron/auto-broadcast</code>{" "}
-            to run every minute. See the setup guide for details — this keeps the free Vercel plan working without upgrading.
+            One-time setup required (already included in your repo as <code className="bg-slate-900 px-1 rounded font-mono">.github/workflows/auto-broadcast-cron.yml</code>):
+            go to your GitHub repo → <b>Settings → Secrets and variables → Actions</b> → add a secret named{" "}
+            <code className="bg-slate-900 px-1 rounded font-mono">APP_URL</code> with your deployed app's URL
+            (e.g. <code className="bg-slate-900 px-1 rounded font-mono">https://your-app.vercel.app</code>).
+            GitHub will then ping the broadcast endpoint every 2 minutes for free — independent of your browser, login state, and Vercel's cron limits.
           </span>
         </div>
 
