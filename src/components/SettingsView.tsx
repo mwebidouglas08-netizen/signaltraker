@@ -190,6 +190,15 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
           It only stops if you click <b className="text-rose-400">Disconnect</b> below or disconnect your Telegram bot.
         </p>
 
+        <div className="flex items-start gap-1.5 text-[10.5px] text-sky-300 bg-sky-950/30 border border-sky-900/40 rounded-lg p-2.5">
+          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            One-time setup required: point a free scheduler (e.g. cron-job.org) at{" "}
+            <code className="bg-slate-900 px-1 rounded font-mono">your-domain.vercel.app/api/cron/auto-broadcast</code>{" "}
+            to run every minute. See the setup guide for details — this keeps the free Vercel plan working without upgrading.
+          </span>
+        </div>
+
         <div className="flex items-center justify-between gap-3 p-3 bg-slate-900/40 border border-slate-850 rounded-xl">
           <div className="flex items-center gap-2">
             <span className={`w-2.5 h-2.5 rounded-full ${isServerActive ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`}></span>
