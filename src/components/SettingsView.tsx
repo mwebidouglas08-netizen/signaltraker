@@ -205,11 +205,16 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
           <div className="flex items-start gap-1.5 text-[10.5px] text-sky-300 bg-sky-950/30 border border-sky-900/40 rounded-lg p-2.5">
             <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>
-              <b>Step 1 — Persistent storage (required, ~2 min):</b> In your Vercel dashboard, open your project →{" "}
-              <b>Storage</b> tab → <b>Create Database</b> → choose <b>KV</b> → connect it to this project.
-              Vercel automatically adds <code className="bg-slate-900 px-1 rounded font-mono">KV_REST_API_URL</code> and{" "}
-              <code className="bg-slate-900 px-1 rounded font-mono">KV_REST_API_TOKEN</code> as environment variables — no manual entry needed.
-              Redeploy after connecting it. Without this step, the server forgets that auto-broadcast is enabled almost immediately.
+              <b>Step 1 — Persistent storage (required, ~3 min):</b> Vercel's old "KV" dashboard option was discontinued.
+              Instead, go to{" "}
+              <a href="https://vercel.com/marketplace/upstash" target="_blank" rel="noreferrer" className="underline text-sky-200">
+                vercel.com/marketplace/upstash
+              </a>{" "}
+              → <b>Install</b> → choose <b>Redis</b> → let Vercel manage it for you → connect it to this project → <b>Redeploy</b>.
+              Then verify at{" "}
+              <code className="bg-slate-900 px-1 rounded font-mono">/api/autobroadcast/diagnose</code> that{" "}
+              <code className="bg-slate-900 px-1 rounded font-mono">willUsePersistentStorage</code> is <code className="bg-slate-900 px-1 rounded font-mono">true</code>.
+              Without this step, the server forgets that auto-broadcast is enabled almost immediately — this is the #1 cause of signals stopping.
             </span>
           </div>
 
