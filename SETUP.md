@@ -31,23 +31,36 @@ to do the sending; here, that machine is Vercel's server, not your device.
 
 ---
 
-## Step 1 — Provision Vercel KV (required, ~2 minutes)
+## Step 1 — Provision persistent storage (required, ~3 minutes)
 
-1. Go to [vercel.com](https://vercel.com) → open your project (`signaltraker`)
-2. Click the **Storage** tab
-3. Click **Create Database** → choose **KV**
-4. Give it any name (e.g. `signal-state`) → **Create**
-5. On the next screen, click **Connect Project** and select your `signaltraker` project
-6. Vercel automatically injects two environment variables into your project:
-   - `KV_REST_API_URL`
-   - `KV_REST_API_TOKEN`
-7. Go to **Deployments** → click the **⋯** menu on the latest deployment → **Redeploy**
-   (this ensures the new environment variables are picked up)
+**Important:** Vercel's old "KV" product (Storage tab → Create Database → KV)
+was discontinued and no longer appears in the dashboard. The replacement is
+the **Upstash Redis** integration via the Vercel Marketplace — it's still
+free and works identically, just installed from a different place.
 
-**How to verify this worked:** open `https://your-app.vercel.app/api/autobroadcast/status`
-in your browser. Look for `"persistenceMode": "kv"` in the response. If it instead
-says `"memory-fallback-not-persistent"`, the KV store isn't connected yet — repeat
-the steps above.
+1. Go to [vercel.com/marketplace/upstash](https://vercel.com/marketplace/upstash)
+2. Click **Install** (or **Add Integration**)
+3. When prompted, choose to let **Vercel manage the Upstash account for you**
+   (simplest option — no separate Upstash signup needed)
+4. Select **Redis** as the product
+5. Pick a name (e.g. `signal-state`), choose the free plan, and create it
+6. On the next screen, **connect it to your `signaltraker` project**
+7. Vercel automatically injects these environment variables into your project
+   (the exact names can vary slightly depending on the flow, so the app checks
+   for both):
+   - `KV_REST_API_URL` / `KV_REST_API_TOKEN`, **or**
+   - `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`
+8. Go to **Deployments** → **⋯** on the latest deployment → **Redeploy**
+   (environment variables only take effect on a fresh deployment)
+
+**How to verify this worked — do this before anything else:**
+Open `https://your-app.vercel.app/api/autobroadcast/diagnose` in your browser.
+You should see `"willUsePersistentStorage": true`. If it's `false`, check the
+individual `*_present` fields to see exactly which variable is missing, fix
+that in Vercel → Settings → Environment Variables, and redeploy again.
+
+Then open `https://your-app.vercel.app/api/autobroadcast/status` and confirm
+`"persistenceMode": "kv"`.
 
 ---
 
@@ -86,6 +99,16 @@ To stop it permanently, click **Disconnect (Stop Auto-Broadcast)** — this is
 the only thing that will stop it going forward (besides disconnecting your bot).
 
 ---
+
+## What "Persistent storage (Vercel KV) is not configured" means
+
+If your scheduler (cron-job.org or GitHub Actions) shows this exact error in
+its response body, it means Step 1 above has not been completed yet — the
+server cannot find either set of Redis environment variables. This is not a
+bug; the server is correctly refusing to report "enabled" as reliable when it
+has nowhere durable to store that state. Visit
+`https://your-app.vercel.app/api/autobroadcast/diagnose` to see precisely
+which environment variable is missing, then complete Step 1.
 
 ## Troubleshooting
 
