@@ -522,10 +522,17 @@ app.post("/api/telegram/delete", async (req, res) => {
 // can run on a different physical machine, so writing to the local disk
 // (fs.writeFileSync to /tmp) does NOT reliably persist between requests.
 // That was the root cause of "enabled" silently resetting to false. This
-// version uses Vercel KV (a free, durable Redis store built into your
-// Vercel account) so the config actually persists across every invocation.
-const KV_URL = process.env.KV_REST_API_URL;
-const KV_TOKEN = process.env.KV_REST_API_TOKEN;
+// version uses a Redis-compatible REST store (Upstash, provisioned through
+// Vercel's Marketplace — the product formerly called "Vercel KV") so the
+// config actually persists across every invocation.
+//
+// NOTE ON ENV VAR NAMES: depending on how the integration was installed,
+// Vercel injects either KV_REST_API_URL/KV_REST_API_TOKEN (legacy Vercel KV
+// naming, still used by the dashboard-driven Marketplace flow) or
+// UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN (Upstash's own naming).
+// Both are checked here so this works regardless of which path was used.
+const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 const KV_STATE_KEY = "signal_broadcaster_state";
 
 interface AutoBroadcastState {
@@ -658,6 +665,23 @@ function buildServerSignal(state: AutoBroadcastState) {
 }
 
 // ── Get current auto-broadcast state (used by the frontend to show status) ──
+// ── Diagnostic: check exactly which storage env vars Vercel has injected ────
+// Visit this directly in your browser to debug KV setup without guessing.
+app.get("/api/autobroadcast/diagnose", (_req, res) => {
+  res.json({
+    KV_REST_API_URL_present: !!process.env.KV_REST_API_URL,
+    KV_REST_API_TOKEN_present: !!process.env.KV_REST_API_TOKEN,
+    UPSTASH_REDIS_REST_URL_present: !!process.env.UPSTASH_REDIS_REST_URL,
+    UPSTASH_REDIS_REST_TOKEN_present: !!process.env.UPSTASH_REDIS_REST_TOKEN,
+    resolvedKvUrlPresent: !!KV_URL,
+    resolvedKvTokenPresent: !!KV_TOKEN,
+    willUsePersistentStorage: !!(KV_URL && KV_TOKEN),
+    hint: !!(KV_URL && KV_TOKEN)
+      ? "Storage is configured correctly."
+      : "No Redis env vars found. Install the Upstash integration from the Vercel Marketplace and connect it to this project, then redeploy. See SETUP.md.",
+  });
+});
+
 app.get("/api/autobroadcast/status", async (_req, res) => {
   const state = await readState();
   res.json({
