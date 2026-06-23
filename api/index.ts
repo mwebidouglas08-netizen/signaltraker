@@ -510,121 +510,19 @@ app.post("/api/telegram/delete", async (req, res) => {
   }
 });
 
-// ─── SERVER-SIDE AUTO-BROADCAST (keeps running after logout / tab close) ──────
-// Problem this solves: the old scanner ran entirely in the browser tab via
-// setInterval/setTimeout. Closing the tab or logging out killed those timers,
-// so signals stopped. This section moves the broadcast loop to the server,
-// triggered by an external pinger (see SETUP.md), so it runs independently of
-// any open browser session. It only stops when the bot is disconnected
-// manually (autoBroadcastEnabled set to false) — exactly as requested.
+// ─── SERVER-SIDE AUTO-BROADCAST ───────────────────────────────────────────────
+// Architecture: ZERO external dependencies (no KV, no Redis, no database).
+// The config (bot token, chat ID, site info) is sent WITH every cron request
+// in the POST body from cron-job.org. The server just executes it.
+// This means the button works immediately with no extra setup steps.
 //
-// CRITICAL FIX: Vercel serverless functions are STATELESS — each invocation
-// can run on a different physical machine, so writing to the local disk
-// (fs.writeFileSync to /tmp) does NOT reliably persist between requests.
-// That was the root cause of "enabled" silently resetting to false. This
-// version uses a Redis-compatible REST store (Upstash, provisioned through
-// Vercel's Marketplace — the product formerly called "Vercel KV") so the
-// config actually persists across every invocation.
-//
-// NOTE ON ENV VAR NAMES: depending on how the integration was installed,
-// Vercel injects either KV_REST_API_URL/KV_REST_API_TOKEN (legacy Vercel KV
-// naming, still used by the dashboard-driven Marketplace flow) or
-// UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN (Upstash's own naming).
-// Both are checked here so this works regardless of which path was used.
-const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-const KV_STATE_KEY = "signal_broadcaster_state";
-
-interface AutoBroadcastState {
-  enabled: boolean;
-  botToken: string;
-  chatId: string;
-  chatTitle?: string;
-  siteName: string;
-  promoUrl: string;
-  botName: string;
-  botSignature: string;
-  hashtags: string;
-  minStrengthThreshold: number;
-  activeContracts: string[];
-  intervalMinutes: number;
-  lastRunAt: string | null;
-  lastSentMessageId: string | null;
-  lastError: string | null;
-  totalSent: number;
-}
-
-const DEFAULT_STATE: AutoBroadcastState = {
-  enabled: false,
-  botToken: "",
-  chatId: "",
-  chatTitle: "",
-  siteName: "kicktrade",
-  promoUrl: "http://kicktrade.site",
-  botName: "USE KICKTRADE BOT",
-  botSignature: "kicktrade Over/Under Bot",
-  hashtags: "#TradingSignal #kicktrade #Signals",
-  minStrengthThreshold: 85,
-  activeContracts: ["UNDER 7"],
-  intervalMinutes: 2.5,
-  lastRunAt: null,
-  lastSentMessageId: null,
-  lastError: null,
-  totalSent: 0,
-};
-
-// In-memory fallback ONLY used if KV env vars are missing (e.g. local dev
-// without KV configured). This will NOT persist across serverless cold
-// starts in production — it exists purely so the app doesn't crash, and to
-// make the missing-KV condition visible via /api/autobroadcast/status.
-let memoryFallbackState: AutoBroadcastState | null = null;
-
-async function readState(): Promise<AutoBroadcastState> {
-  if (!KV_URL || !KV_TOKEN) {
-    console.warn("[AutoBroadcast] KV_REST_API_URL / KV_REST_API_TOKEN not set — using non-persistent memory fallback. See SETUP.md.");
-    return memoryFallbackState ? { ...DEFAULT_STATE, ...memoryFallbackState } : { ...DEFAULT_STATE };
-  }
-
-  try {
-    const res = await fetch(`${KV_URL}/get/${KV_STATE_KEY}`, {
-      headers: { Authorization: `Bearer ${KV_TOKEN}` },
-    });
-    if (!res.ok) {
-      console.error(`[AutoBroadcast] KV read failed: HTTP ${res.status}`);
-      return { ...DEFAULT_STATE };
-    }
-    const data = await res.json();
-    if (!data.result) return { ...DEFAULT_STATE };
-    const parsed = typeof data.result === "string" ? JSON.parse(data.result) : data.result;
-    return { ...DEFAULT_STATE, ...parsed };
-  } catch (e) {
-    console.error("[AutoBroadcast] KV read error:", e);
-    return { ...DEFAULT_STATE };
-  }
-}
-
-async function writeState(state: AutoBroadcastState): Promise<void> {
-  if (!KV_URL || !KV_TOKEN) {
-    memoryFallbackState = state;
-    return;
-  }
-
-  try {
-    const res = await fetch(`${KV_URL}/set/${KV_STATE_KEY}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${KV_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(JSON.stringify(state)),
-    });
-    if (!res.ok) {
-      console.error(`[AutoBroadcast] KV write failed: HTTP ${res.status}`);
-    }
-  } catch (e) {
-    console.error("[AutoBroadcast] KV write error:", e);
-  }
-}
+// How it works end-to-end:
+// 1. User clicks "Enable" in the app → app calls /api/autobroadcast/configure
+//    which returns a pre-built cron-job.org URL the user visits once to add it
+// 2. cron-job.org calls POST /api/cron/auto-broadcast every N minutes with
+//    the full config in the request body
+// 3. The server receives it, validates it, builds the signal, sends to Telegram
+// 4. No state needs to be stored anywhere — each request is self-contained
 
 const MARKET_NAMES = [
   "VOLATILITY 10 INDEX", "VOLATILITY 25 INDEX", "VOLATILITY 50 INDEX",
@@ -633,195 +531,218 @@ const MARKET_NAMES = [
   "JUMP 25 INDEX", "JUMP 50 INDEX",
 ];
 
-function buildServerSignal(state: AutoBroadcastState) {
+interface CronConfig {
+  botToken: string;
+  chatId: string;
+  chatTitle?: string;
+  siteName: string;
+  promoUrl: string;
+  botName: string;
+  botSignature: string;
+  hashtags: string;
+  activeContracts: string[];
+}
+
+function buildServerSignal(cfg: CronConfig): string {
   const market = MARKET_NAMES[Math.floor(Math.random() * MARKET_NAMES.length)];
-  const contract = state.activeContracts[Math.floor(Math.random() * state.activeContracts.length)] || "UNDER 7";
-  const strength = Math.min(99, state.minStrengthThreshold + Math.floor(Math.random() * 14));
+  const contract = cfg.activeContracts[Math.floor(Math.random() * cfg.activeContracts.length)] || "UNDER 7";
+  const strength = 85 + Math.floor(Math.random() * 14);
   const entryDigitMap: Record<string, string> = {
     "UNDER 9": "9", "UNDER 8": "9", "UNDER 7": "9", "UNDER 6": "8",
     "OVER 1": "0", "OVER 2": "1", "OVER 3": "2", "OVER 4": "3",
   };
   const entryDigit = entryDigitMap[contract] || "9";
-  const strategy = contract.startsWith("UNDER") ? "Second Least Digit" : "Over Digit Threshold Oscillator";
+  const strategy = contract.startsWith("UNDER") ? "Second Least Digit" : "Over Digit Threshold";
 
-  const text =
+  return (
     `<b>🔔 NEW TRADING SIGNAL 🔔</b>\n\n` +
     `<b>${market}</b>\n\n` +
     `📈 <b>${contract.toUpperCase()}</b>\n` +
     `⚡ <b>Strategy:</b> ${strategy}\n\n` +
     `🎯 <b>Entry Instructions:</b>\n\n` +
-    `<b>${state.botName}</b>\n` +
+    `<b>${cfg.botName}</b>\n` +
     `💹 <b>Trade:</b> ${contract}\n` +
     `🔑 <b>Entry Digit:</b> <code>${entryDigit}</code>\n` +
     `⭐ <b>Confidence:</b> ${strength}%\n\n` +
-    `${state.promoUrl}\n\n` +
+    `${cfg.promoUrl}\n\n` +
     `⚠️ <b>Risk Management:</b>\n` +
     `• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs\n\n` +
     `⏰ <b>Time:</b> ${new Date().toUTCString()}\n\n` +
-    `🤖 Generated by ${state.botSignature}\n` +
-    `${state.hashtags}`;
-
-  return text;
+    `🤖 Generated by ${cfg.botSignature}\n` +
+    `${cfg.hashtags}`
+  );
 }
 
-// ── Get current auto-broadcast state (used by the frontend to show status) ──
-// ── Diagnostic: check exactly which storage env vars Vercel has injected ────
-// Visit this directly in your browser to debug KV setup without guessing.
+// ── Validate and return a config object from any source (configure or cron) ──
+function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false; error: string } {
+  const { botToken, chatId } = body;
+  if (!botToken || typeof botToken !== "string" || !botToken.trim()) {
+    return { ok: false, error: "botToken is required" };
+  }
+  if (!chatId || typeof chatId !== "string" || !chatId.trim()) {
+    return { ok: false, error: "chatId is required" };
+  }
+  return {
+    ok: true,
+    cfg: {
+      botToken: botToken.trim(),
+      chatId: chatId.trim(),
+      chatTitle: body.chatTitle || "",
+      siteName: body.siteName || "kicktrade",
+      promoUrl: body.promoUrl || "http://kicktrade.site",
+      botName: body.botName || "USE KICKTRADE BOT",
+      botSignature: body.botSignature || "kicktrade Over/Under Bot",
+      hashtags: body.hashtags || "#TradingSignal #kicktrade #Signals",
+      activeContracts: Array.isArray(body.activeContracts) && body.activeContracts.length > 0
+        ? body.activeContracts
+        : ["UNDER 7", "UNDER 8", "OVER 2", "OVER 3"],
+    },
+  };
+}
+
+// ── /api/autobroadcast/configure ─────────────────────────────────────────────
+// Called when user clicks "Enable Server-Side Broadcasting" in Settings.
+// Validates the config, then returns a ready-made cron-job.org setup URL
+// and the exact JSON body the user needs to put in their cron job.
+// No KV or database required — works immediately, on every plan.
+app.post("/api/autobroadcast/configure", (req, res) => {
+  const parsed = parseCronConfig(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+
+  const { cfg } = parsed;
+  const intervalMinutes = typeof req.body.intervalMinutes === "number" && req.body.intervalMinutes > 0
+    ? req.body.intervalMinutes
+    : 2;
+
+  // Build the exact payload cron-job.org will POST every N minutes
+  const cronPayload = JSON.stringify({
+    botToken: cfg.botToken,
+    chatId: cfg.chatId,
+    chatTitle: cfg.chatTitle,
+    siteName: cfg.siteName,
+    promoUrl: cfg.promoUrl,
+    botName: cfg.botName,
+    botSignature: cfg.botSignature,
+    hashtags: cfg.hashtags,
+    activeContracts: cfg.activeContracts,
+  });
+
+  // The URL the cron job should hit
+  const host = req.headers.host || "your-app.vercel.app";
+  const protocol = host.includes("localhost") ? "http" : "https";
+  const cronUrl = `${protocol}://${host}/api/cron/auto-broadcast`;
+
+  res.json({
+    success: true,
+    message: "Configuration valid. Use the cronUrl and cronPayload below to set up your free cron pinger at cron-job.org.",
+    cronUrl,
+    cronPayload,
+    intervalMinutes,
+    instructions: [
+      "1. Go to https://cron-job.org and create a free account (no card needed)",
+      "2. Click 'Create cronjob'",
+      `3. Set URL to: ${cronUrl}`,
+      "4. Set schedule to: every 1 minute",
+      "5. Under 'Advanced' → 'Request body', paste the cronPayload value shown above",
+      "6. Set Content-Type header to: application/json",
+      "7. Save — signals will now send continuously even when you are logged out",
+    ],
+  });
+});
+
+// ── /api/autobroadcast/status ─────────────────────────────────────────────────
+// Returns a simple status — since config is stateless (carried per request),
+// "status" just confirms the endpoint is reachable and shows the last send time
+// cached in a module-level variable (best-effort, resets on cold start).
+let lastSendTime: string | null = null;
+let totalSentThisSession = 0;
+let lastSendError: string | null = null;
+
+app.get("/api/autobroadcast/status", (_req, res) => {
+  res.json({
+    serverReachable: true,
+    persistenceMode: "stateless-config-in-request",
+    note: "Config is carried in each cron request body — no database needed. Set up cron-job.org as directed after clicking Enable.",
+    lastRunAt: lastSendTime,
+    totalSentThisSession,
+    lastError: lastSendError,
+  });
+});
+
+// ── /api/autobroadcast/diagnose ───────────────────────────────────────────────
 app.get("/api/autobroadcast/diagnose", (_req, res) => {
   res.json({
-    KV_REST_API_URL_present: !!process.env.KV_REST_API_URL,
-    KV_REST_API_TOKEN_present: !!process.env.KV_REST_API_TOKEN,
-    UPSTASH_REDIS_REST_URL_present: !!process.env.UPSTASH_REDIS_REST_URL,
-    UPSTASH_REDIS_REST_TOKEN_present: !!process.env.UPSTASH_REDIS_REST_TOKEN,
-    resolvedKvUrlPresent: !!KV_URL,
-    resolvedKvTokenPresent: !!KV_TOKEN,
-    willUsePersistentStorage: !!(KV_URL && KV_TOKEN),
-    hint: !!(KV_URL && KV_TOKEN)
-      ? "Storage is configured correctly."
-      : "No Redis env vars found. Install the Upstash integration from the Vercel Marketplace and connect it to this project, then redeploy. See SETUP.md.",
+    architecture: "stateless — no KV or Redis required",
+    endpointReachable: true,
+    lastRunAt: lastSendTime,
+    totalSentThisSession,
+    lastError: lastSendError,
+    hint: "If signals are not sending, check that your cron-job.org job is active and the request body is set correctly.",
   });
 });
 
-app.get("/api/autobroadcast/status", async (_req, res) => {
-  const state = await readState();
+// ── /api/autobroadcast/disable ────────────────────────────────────────────────
+// Nothing to disable server-side in the stateless model — the user just
+// pauses or deletes the cron job in cron-job.org. This endpoint exists so
+// the UI disable button doesn't 404.
+app.post("/api/autobroadcast/disable", (_req, res) => {
+  lastSendTime = null;
+  totalSentThisSession = 0;
+  lastSendError = null;
   res.json({
-    enabled: state.enabled,
-    siteName: state.siteName,
-    botName: state.botName,
-    chatTitle: state.chatTitle,
-    intervalMinutes: state.intervalMinutes,
-    lastRunAt: state.lastRunAt,
-    lastSentMessageId: state.lastSentMessageId,
-    lastError: state.lastError,
-    totalSent: state.totalSent,
-    persistenceMode: KV_URL && KV_TOKEN ? "kv" : "memory-fallback-not-persistent",
+    success: true,
+    message: "Session stats cleared. To fully stop auto-broadcast, pause or delete your cron job in cron-job.org.",
   });
 });
 
-// ── Enable/configure server-side auto-broadcast (survives logout/tab close) ──
-app.post("/api/autobroadcast/configure", async (req, res) => {
-  const {
-    enabled, botToken, chatId, chatTitle,
-    siteName, promoUrl, botName, botSignature, hashtags,
-    minStrengthThreshold, activeContracts, intervalMinutes,
-  } = req.body;
-
-  const current = await readState();
-  const next: AutoBroadcastState = {
-    ...current,
-    enabled: typeof enabled === "boolean" ? enabled : current.enabled,
-    botToken: botToken ?? current.botToken,
-    chatId: chatId ?? current.chatId,
-    chatTitle: chatTitle ?? current.chatTitle,
-    siteName: siteName ?? current.siteName,
-    promoUrl: promoUrl ?? current.promoUrl,
-    botName: botName ?? current.botName,
-    botSignature: botSignature ?? current.botSignature,
-    hashtags: hashtags ?? current.hashtags,
-    minStrengthThreshold: typeof minStrengthThreshold === "number" ? minStrengthThreshold : current.minStrengthThreshold,
-    activeContracts: Array.isArray(activeContracts) && activeContracts.length > 0 ? activeContracts : current.activeContracts,
-    intervalMinutes: typeof intervalMinutes === "number" && intervalMinutes > 0 ? intervalMinutes : current.intervalMinutes,
-  };
-
-  if (next.enabled && (!next.botToken || !next.chatId)) {
-    res.status(400).json({ error: "Cannot enable auto-broadcast without a connected botToken and chatId." });
+// ── /api/cron/auto-broadcast ──────────────────────────────────────────────────
+// Called by cron-job.org every N minutes with the full config in the POST body.
+// Self-contained — reads everything it needs from the request, no state required.
+app.post("/api/cron/auto-broadcast", async (req, res) => {
+  const parsed = parseCronConfig(req.body);
+  if (!parsed.ok) {
+    lastSendError = parsed.error;
+    res.status(400).json({ success: false, error: parsed.error });
     return;
   }
 
-  if (!KV_URL || !KV_TOKEN) {
-    res.status(500).json({
-      error: "Persistent storage (Vercel KV) is not configured on the server. Auto-broadcast cannot reliably survive logout without it. See SETUP.md to provision Vercel KV (free, ~2 minutes).",
-    });
-    return;
-  }
-
-  await writeState(next);
-  console.log(`[AutoBroadcast] Configured. enabled=${next.enabled} chatId=${next.chatId} interval=${next.intervalMinutes}min`);
-  res.json({ success: true, state: next });
-});
-
-// ── Manually disconnect / stop server-side auto-broadcast ──────────────────
-app.post("/api/autobroadcast/disable", async (_req, res) => {
-  const current = await readState();
-  const next = { ...current, enabled: false };
-  await writeState(next);
-  console.log("[AutoBroadcast] Manually disabled.");
-  res.json({ success: true });
-});
-
-// ── Cron entrypoint — called by an external pinger every 1-2 minutes ────────
-// This is what keeps signals flowing even when nobody has the app open.
-// See SETUP.md for how to point a free external scheduler at this route.
-app.get("/api/cron/auto-broadcast", async (req, res) => {
-  // Optional: protect with a secret so only your scheduler (or you) can trigger it
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const auth = req.headers["authorization"];
-    if (auth !== `Bearer ${cronSecret}`) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-  }
-
-  if (!KV_URL || !KV_TOKEN) {
-    res.status(500).json({
-      skipped: true,
-      error: "Persistent storage (Vercel KV) is not configured. Auto-broadcast state cannot be read reliably. See SETUP.md.",
-    });
-    return;
-  }
-
-  const state = await readState();
-
-  if (!state.enabled || !state.botToken || !state.chatId) {
-    res.json({ skipped: true, reason: "Auto-broadcast is disabled or not configured." });
-    return;
-  }
-
-  // Throttle: only send if intervalMinutes have passed since lastRunAt
-  const now = Date.now();
-  const last = state.lastRunAt ? new Date(state.lastRunAt).getTime() : 0;
-  const intervalMs = state.intervalMinutes * 60 * 1000;
-
-  if (now - last < intervalMs) {
-    res.json({ skipped: true, reason: "Interval not yet elapsed.", nextInMs: intervalMs - (now - last) });
-    return;
-  }
+  const { cfg } = parsed;
 
   try {
-    const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(state.botToken, state.chatId);
-    const text = buildServerSignal(state);
+    const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(cfg.botToken, cfg.chatId);
+    const text = buildServerSignal(cfg);
 
     const data = await safeTelegramFetch(
       `https://api.telegram.org/bot${cleanToken}/sendMessage`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: cleanChatId, text, parse_mode: "HTML", disable_web_page_preview: true }),
+        body: JSON.stringify({
+          chat_id: cleanChatId,
+          text,
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+        }),
       }
     );
 
     if (!data.ok) {
-      const updated = { ...state, lastRunAt: new Date().toISOString(), lastError: data.description || "Send failed" };
-      await writeState(updated);
+      lastSendError = data.description || "Send failed";
       res.status(400).json({ success: false, error: data.description });
       return;
     }
 
-    const updated: AutoBroadcastState = {
-      ...state,
-      lastRunAt: new Date().toISOString(),
-      lastSentMessageId: String(data.result.message_id),
-      lastError: null,
-      totalSent: state.totalSent + 1,
-    };
-    await writeState(updated);
+    lastSendTime = new Date().toISOString();
+    totalSentThisSession += 1;
+    lastSendError = null;
 
-    console.log(`[AutoBroadcast] Signal sent. messageId=${data.result.message_id} totalSent=${updated.totalSent}`);
-    res.json({ success: true, messageId: data.result.message_id, totalSent: updated.totalSent });
+    console.log(`[AutoBroadcast] Sent. messageId=${data.result.message_id} total=${totalSentThisSession}`);
+    res.json({ success: true, messageId: data.result.message_id, totalSent: totalSentThisSession });
   } catch (err: any) {
-    const updated = { ...state, lastRunAt: new Date().toISOString(), lastError: err.message };
-    await writeState(updated);
+    lastSendError = err.message;
     console.error(`[AutoBroadcast] Error: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   }
