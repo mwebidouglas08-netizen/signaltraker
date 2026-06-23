@@ -665,7 +665,8 @@ app.get("/api/autobroadcast/status", (_req, res) => {
   res.json({
     serverReachable: true,
     persistenceMode: "stateless-config-in-request",
-    note: "Config is carried in each cron request body — no database needed. Set up cron-job.org as directed after clicking Enable.",
+    currentPhase: broadcastPhase === 0 ? "alert" : "signal",
+    nextMessage: broadcastPhase === 0 ? "pre-signal alert will be sent next" : "trading signal will be sent next",
     lastRunAt: lastSendTime,
     totalSentThisSession,
     lastError: lastSendError,
@@ -701,6 +702,36 @@ app.post("/api/autobroadcast/disable", (_req, res) => {
 // ── /api/cron/auto-broadcast ──────────────────────────────────────────────────
 // Called by cron-job.org every N minutes with the full config in the POST body.
 // Self-contained — reads everything it needs from the request, no state required.
+// ── Two-phase tracking: alternates between alert and signal on each ping ─────
+// Phase 0 = send the pre-signal alert ("standby, signal coming in 1 min")
+// Phase 1 = send the actual trading signal
+// This way, cron fires every minute and the sequence is:
+//   minute 1: alert sent
+//   minute 2: actual signal sent
+//   minute 3: alert sent
+//   minute 4: actual signal sent ... and so on
+//
+// The phase is stored in a module-level variable. On Vercel, a cold start
+// resets it to 0 (alert phase), which is always safe — worst case the user
+// sees two consecutive alerts before a signal, never two signals without an alert.
+let broadcastPhase: 0 | 1 = 0;
+
+function buildAlertMessage(cfg: CronConfig): string {
+  return (
+    `🚨 <b>ALERT TO ALL ${cfg.siteName.toUpperCase()} MEMBERS 🚨</b>\n\n` +
+    `⚠ In just 1 minute, a new signal will be sent!\n` +
+    `📢 <b>Be ready and standby!</b>\n\n` +
+    `🖥 <b>Go to:</b> ${cfg.promoUrl}\n` +
+    `🤖 <b>Load your bot:</b> <code>${cfg.botName}</code>\n\n` +
+    `✅ Make sure your settings are ready…\n` +
+    `🚀 Let's catch this trade together!\n\n` +
+    `#StayAlert #${cfg.siteName.replace(/\s+/g, "").toLowerCase()}signal 🔥📈\n` +
+    `We either go home or go hard 💸\n` +
+    `No risk no Ferrari 🚀\n` +
+    cfg.promoUrl
+  );
+}
+
 app.post("/api/cron/auto-broadcast", async (req, res) => {
   const parsed = parseCronConfig(req.body);
   if (!parsed.ok) {
@@ -713,7 +744,12 @@ app.post("/api/cron/auto-broadcast", async (req, res) => {
 
   try {
     const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(cfg.botToken, cfg.chatId);
-    const text = buildServerSignal(cfg);
+
+    // Decide which message to send based on current phase
+    const currentPhase = broadcastPhase;
+    const text = currentPhase === 0
+      ? buildAlertMessage(cfg)
+      : buildServerSignal(cfg);
 
     const data = await safeTelegramFetch(
       `https://api.telegram.org/bot${cleanToken}/sendMessage`,
@@ -735,12 +771,22 @@ app.post("/api/cron/auto-broadcast", async (req, res) => {
       return;
     }
 
+    // Flip phase for next ping
+    broadcastPhase = currentPhase === 0 ? 1 : 0;
+
     lastSendTime = new Date().toISOString();
     totalSentThisSession += 1;
     lastSendError = null;
 
-    console.log(`[AutoBroadcast] Sent. messageId=${data.result.message_id} total=${totalSentThisSession}`);
-    res.json({ success: true, messageId: data.result.message_id, totalSent: totalSentThisSession });
+    const phaseName = currentPhase === 0 ? "alert" : "signal";
+    console.log(`[AutoBroadcast] ${phaseName} sent. messageId=${data.result.message_id} total=${totalSentThisSession} nextPhase=${broadcastPhase}`);
+    res.json({
+      success: true,
+      phase: phaseName,
+      messageId: data.result.message_id,
+      totalSent: totalSentThisSession,
+      nextPhase: broadcastPhase === 0 ? "alert" : "signal",
+    });
   } catch (err: any) {
     lastSendError = err.message;
     console.error(`[AutoBroadcast] Error: ${err.message}`);
