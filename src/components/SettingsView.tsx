@@ -33,9 +33,9 @@ interface ServerStatus {
 
 interface CronSetup {
   cronUrl: string;
-  cronPayload: string;
+  alertPayload: string;
+  signalPayload: string;
   intervalMinutes: number;
-  instructions: string[];
 }
 
 function getSiteConfigLocal() {
@@ -147,15 +147,16 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
 
       setCronSetup({
         cronUrl: data.cronUrl,
-        cronPayload: data.cronPayload,
+        alertPayload: data.alertPayload,
+        signalPayload: data.signalPayload,
         intervalMinutes: data.intervalMinutes,
-        instructions: data.instructions,
       });
 
       setIsEnabled(true);
       localStorage.setItem("server_broadcast_enabled", "true");
       localStorage.setItem("server_broadcast_cron_url", data.cronUrl);
-      localStorage.setItem("server_broadcast_cron_payload", data.cronPayload);
+      localStorage.setItem("server_broadcast_alert_payload", data.alertPayload);
+      localStorage.setItem("server_broadcast_signal_payload", data.signalPayload);
     } catch (err: any) {
       setServerError(err.message || "Enable failed.");
     } finally {
@@ -185,13 +186,14 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
   // Restore saved cron setup from localStorage on mount
   useEffect(() => {
     const savedUrl = localStorage.getItem("server_broadcast_cron_url");
-    const savedPayload = localStorage.getItem("server_broadcast_cron_payload");
-    if (savedUrl && savedPayload && localStorage.getItem("server_broadcast_enabled") === "true") {
+    const savedAlert = localStorage.getItem("server_broadcast_alert_payload");
+    const savedSignal = localStorage.getItem("server_broadcast_signal_payload");
+    if (savedUrl && savedAlert && savedSignal && localStorage.getItem("server_broadcast_enabled") === "true") {
       setCronSetup({
         cronUrl: savedUrl,
-        cronPayload: savedPayload,
+        alertPayload: savedAlert,
+        signalPayload: savedSignal,
         intervalMinutes,
-        instructions: [],
       });
     }
   }, []);
@@ -293,43 +295,45 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
           <div className="bg-slate-900/60 border border-emerald-900/30 rounded-xl p-4 space-y-4">
             <div className="flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <span className="text-xs font-bold text-emerald-300">Configuration ready — complete the 3 steps below once</span>
+              <span className="text-xs font-bold text-emerald-300">Set up 2 cron jobs — takes 3 minutes, works forever</span>
             </div>
 
-            <div className="space-y-3 text-[11px]">
-              <div className="space-y-1">
-                <p className="text-slate-300 font-semibold">Step 1 — Go to{" "}
-                  <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="text-sky-400 underline">cron-job.org</a>
-                  {" "}→ free account → Create cronjob
-                </p>
-              </div>
+            <div className="bg-sky-950/30 border border-sky-900/30 rounded-lg p-2.5 flex items-start gap-1.5">
+              <Info className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+              <p className="text-[10.5px] text-sky-200">
+                Go to <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="underline font-bold">cron-job.org</a> → free account → create <b>2 separate cron jobs</b> below. Same URL, same interval — different bodies, 1 minute apart. Alert always fires 1 min before signal, at any interval.
+              </p>
+            </div>
 
-              <div className="space-y-1">
-                <p className="text-slate-300 font-semibold">Step 2 — Set the URL:</p>
-                <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2">
-                  <code className="text-emerald-300 text-[10px] break-all flex-1">{cronSetup.cronUrl}</code>
-                  <CopyButton text={cronSetup.cronUrl} />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-slate-300 font-semibold">Step 3 — Under <b>Advanced → Request body</b>, paste this JSON exactly:</p>
-                <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2">
-                  <code className="text-sky-300 text-[9.5px] break-all flex-1 font-mono leading-relaxed">
-                    {cronSetup.cronPayload}
-                  </code>
-                  <CopyButton text={cronSetup.cronPayload} />
-                </div>
-                <p className="text-slate-500 text-[10px]">Also set the Content-Type header to: <code className="bg-slate-900 px-1 rounded">application/json</code></p>
-              </div>
-
-              <div className="bg-sky-950/30 border border-sky-900/30 rounded-lg p-2.5 flex items-start gap-1.5">
-                <Info className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
-                <p className="text-sky-200">
-                  Set the schedule to <b>every 1 minute</b>. Once saved, cron-job.org pings your server every minute 24/7 — completely independent of your browser or login state. That's it!
-                </p>
+            <div className="space-y-1.5">
+              <p className="text-[10.5px] font-bold text-slate-300">Both cron jobs — same URL:</p>
+              <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2">
+                <code className="text-emerald-300 text-[10px] break-all flex-1">{cronSetup.cronUrl}</code>
+                <CopyButton text={cronSetup.cronUrl} />
               </div>
             </div>
+
+            <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 space-y-2">
+              <p className="text-[11px] font-bold text-amber-300">🔔 Cron Job 1 — Alert (fires first)</p>
+              <p className="text-[10px] text-slate-400">Schedule: your interval (e.g. every 5 min) · Method: POST · Content-Type: application/json</p>
+              <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
+                <code className="text-amber-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.alertPayload}</code>
+                <CopyButton text={cronSetup.alertPayload} />
+              </div>
+            </div>
+
+            <div className="bg-emerald-950/20 border border-emerald-900/30 rounded-xl p-3 space-y-2">
+              <p className="text-[11px] font-bold text-emerald-300">📈 Cron Job 2 — Signal (fires 1 min after alert)</p>
+              <p className="text-[10px] text-slate-400">Schedule: same interval, <b className="text-white">started/saved 1 minute after Cron Job 1</b> · Method: POST · Content-Type: application/json</p>
+              <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
+                <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.signalPayload}</code>
+                <CopyButton text={cronSetup.signalPayload} />
+              </div>
+            </div>
+
+            <p className="text-[10px] text-slate-500">
+              <b className="text-slate-300">Tip:</b> Create and save Cron Job 1 first. Wait exactly 1 minute, then create and save Cron Job 2. They will naturally be offset by 1 minute forever.
+            </p>
           </div>
         )}
 
@@ -352,8 +356,9 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
                 type="button"
                 onClick={() => {
                   const u = localStorage.getItem("server_broadcast_cron_url");
-                  const p = localStorage.getItem("server_broadcast_cron_payload");
-                  if (u && p) setCronSetup({ cronUrl: u, cronPayload: p, intervalMinutes, instructions: [] });
+                  const a = localStorage.getItem("server_broadcast_alert_payload");
+                  const s = localStorage.getItem("server_broadcast_signal_payload");
+                  if (u && a && s) setCronSetup({ cronUrl: u, alertPayload: a, signalPayload: s, intervalMinutes });
                 }}
                 className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-all"
               >
