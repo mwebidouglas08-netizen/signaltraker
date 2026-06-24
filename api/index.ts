@@ -601,10 +601,10 @@ function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false
 }
 
 // ── /api/autobroadcast/configure ─────────────────────────────────────────────
-// Called when user clicks "Enable Server-Side Broadcasting" in Settings.
-// Validates the config, then returns a ready-made cron-job.org setup URL
-// and the exact JSON body the user needs to put in their cron job.
-// No KV or database required — works immediately, on every plan.
+// Returns TWO separate cron payloads: one for alert, one for signal.
+// The user sets up TWO cron jobs in cron-job.org with the SAME interval,
+// offset by exactly 1 minute. This is the only reliable stateless approach
+// on Vercel — phase is encoded in the request body, never stored server-side.
 app.post("/api/autobroadcast/configure", (req, res) => {
   const parsed = parseCronConfig(req.body);
   if (!parsed.ok) {
@@ -617,8 +617,11 @@ app.post("/api/autobroadcast/configure", (req, res) => {
     ? req.body.intervalMinutes
     : 2;
 
-  // Build the exact payload cron-job.org will POST every N minutes
-  const cronPayload = JSON.stringify({
+  const host = req.headers.host || "your-app.vercel.app";
+  const protocol = host.includes("localhost") ? "http" : "https";
+  const cronUrl = `${protocol}://${host}/api/cron/auto-broadcast`;
+
+  const base = {
     botToken: cfg.botToken,
     chatId: cfg.chatId,
     chatTitle: cfg.chatTitle,
@@ -628,28 +631,19 @@ app.post("/api/autobroadcast/configure", (req, res) => {
     botSignature: cfg.botSignature,
     hashtags: cfg.hashtags,
     activeContracts: cfg.activeContracts,
-  });
+  };
 
-  // The URL the cron job should hit
-  const host = req.headers.host || "your-app.vercel.app";
-  const protocol = host.includes("localhost") ? "http" : "https";
-  const cronUrl = `${protocol}://${host}/api/cron/auto-broadcast`;
+  const alertPayload  = JSON.stringify({ ...base, type: "alert" });
+  const signalPayload = JSON.stringify({ ...base, type: "signal" });
 
   res.json({
     success: true,
-    message: "Configuration valid. Use the cronUrl and cronPayload below to set up your free cron pinger at cron-job.org.",
     cronUrl,
-    cronPayload,
+    alertPayload,
+    signalPayload,
     intervalMinutes,
-    instructions: [
-      "1. Go to https://cron-job.org and create a free account (no card needed)",
-      "2. Click 'Create cronjob'",
-      `3. Set URL to: ${cronUrl}`,
-      "4. Set schedule to: every 1 minute",
-      "5. Under 'Advanced' → 'Request body', paste the cronPayload value shown above",
-      "6. Set Content-Type header to: application/json",
-      "7. Save — signals will now send continuously even when you are logged out",
-    ],
+    // kept for backwards compatibility with old SettingsView versions
+    cronPayload: signalPayload,
   });
 });
 
@@ -665,8 +659,8 @@ app.get("/api/autobroadcast/status", (_req, res) => {
   res.json({
     serverReachable: true,
     persistenceMode: "stateless-config-in-request",
-    currentPhase: broadcastPhase === 0 ? "alert" : "signal",
-    nextMessage: broadcastPhase === 0 ? "pre-signal alert will be sent next" : "trading signal will be sent next",
+    currentPhase: "determined-by-request-body",
+    nextMessage: "alert fires from Cron Job 1, signal fires from Cron Job 2 — 1 minute later",
     lastRunAt: lastSendTime,
     totalSentThisSession,
     lastError: lastSendError,
@@ -702,20 +696,7 @@ app.post("/api/autobroadcast/disable", (_req, res) => {
 // ── /api/cron/auto-broadcast ──────────────────────────────────────────────────
 // Called by cron-job.org every N minutes with the full config in the POST body.
 // Self-contained — reads everything it needs from the request, no state required.
-// ── Two-phase tracking: alternates between alert and signal on each ping ─────
-// Phase 0 = send the pre-signal alert ("standby, signal coming in 1 min")
-// Phase 1 = send the actual trading signal
-// This way, cron fires every minute and the sequence is:
-//   minute 1: alert sent
-//   minute 2: actual signal sent
-//   minute 3: alert sent
-//   minute 4: actual signal sent ... and so on
-//
-// The phase is stored in a module-level variable. On Vercel, a cold start
-// resets it to 0 (alert phase), which is always safe — worst case the user
-// sees two consecutive alerts before a signal, never two signals without an alert.
-let broadcastPhase: 0 | 1 = 0;
-
+// ── buildAlertMessage ─────────────────────────────────────────────────────────
 function buildAlertMessage(cfg: CronConfig): string {
   return (
     `🚨 <b>ALERT TO ALL ${cfg.siteName.toUpperCase()} MEMBERS 🚨</b>\n\n` +
@@ -732,6 +713,15 @@ function buildAlertMessage(cfg: CronConfig): string {
   );
 }
 
+// ── /api/cron/auto-broadcast ──────────────────────────────────────────────────
+// STATELESS PHASE DESIGN: the caller (cron-job.org) encodes whether to send
+// an alert or a signal via the "type" field in the request body.
+// Two cron jobs are set up — both fire at the same interval (e.g. every 5 min)
+// but are offset by exactly 1 minute:
+//   Cron Job 1 (alert)  → body includes type:"alert"  — fires at :00, :05, :10 ...
+//   Cron Job 2 (signal) → body includes type:"signal" — fires at :01, :06, :11 ...
+// This is the only approach that works reliably on Vercel since module-level
+// variables reset on every cold start (each cron ping = fresh instance).
 app.post("/api/cron/auto-broadcast", async (req, res) => {
   const parsed = parseCronConfig(req.body);
   if (!parsed.ok) {
@@ -741,15 +731,13 @@ app.post("/api/cron/auto-broadcast", async (req, res) => {
   }
 
   const { cfg } = parsed;
+  // "type" comes from the cron-job.org request body — either "alert" or "signal"
+  // If missing (old single-cron setup), default to "signal" so it still works.
+  const messageType: "alert" | "signal" = req.body.type === "alert" ? "alert" : "signal";
 
   try {
     const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(cfg.botToken, cfg.chatId);
-
-    // Decide which message to send based on current phase
-    const currentPhase = broadcastPhase;
-    const text = currentPhase === 0
-      ? buildAlertMessage(cfg)
-      : buildServerSignal(cfg);
+    const text = messageType === "alert" ? buildAlertMessage(cfg) : buildServerSignal(cfg);
 
     const data = await safeTelegramFetch(
       `https://api.telegram.org/bot${cleanToken}/sendMessage`,
@@ -771,21 +759,16 @@ app.post("/api/cron/auto-broadcast", async (req, res) => {
       return;
     }
 
-    // Flip phase for next ping
-    broadcastPhase = currentPhase === 0 ? 1 : 0;
-
     lastSendTime = new Date().toISOString();
     totalSentThisSession += 1;
     lastSendError = null;
 
-    const phaseName = currentPhase === 0 ? "alert" : "signal";
-    console.log(`[AutoBroadcast] ${phaseName} sent. messageId=${data.result.message_id} total=${totalSentThisSession} nextPhase=${broadcastPhase}`);
+    console.log(`[AutoBroadcast] ${messageType} sent. messageId=${data.result.message_id} total=${totalSentThisSession}`);
     res.json({
       success: true,
-      phase: phaseName,
+      type: messageType,
       messageId: data.result.message_id,
       totalSent: totalSentThisSession,
-      nextPhase: broadcastPhase === 0 ? "alert" : "signal",
     });
   } catch (err: any) {
     lastSendError = err.message;
