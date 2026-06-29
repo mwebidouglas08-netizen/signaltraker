@@ -575,17 +575,8 @@ export default function VolatilityScanner({
   }, [wsMode, isRunning]);
 
   // Pre-Signal warning dispatch helper
-  const triggerPreSignalWarning = async () => {
-    const warningMsg = `📡 [Pre-Signal Alert] Sending upcoming trade warning alert to the Telegram channel...`;
-    setAutoLog((prev) => [warningMsg, ...prev.slice(0, 49)]);
-
-    let alertText = `🚨 <b>ALERT TO ALL ${getSiteConfig().siteName.toUpperCase()} MEMBERS  🚨</b>\n\n`;
-    alertText += `⚠ In just a few minutes, a new signal will be sent!\n`;
-    alertText += `📢 <b>Be ready and standby!</b>\n\n`;
-    alertText += `🖥 <b>Go to:</b> ${getSiteConfig().promoUrl}\n`;
-    alertText += `🤖 <b>Load your bot:</b> <code>${getSiteConfig().botName}</code>\n\n`;
-    alertText += `✅ Make sure your settings are ready…\n`;
-    alertText += `🚀 Let’s catch this trade together!\n\n`;
+ 
+ et’s catch this trade together!\n\n`;
     alertText += `#StayAlert #${getSiteConfig().siteName.replace(/\s+/g, '').toLowerCase()}signal 🔥📈 🔥 We either go home or go hard 💸\n`;
     alertText += `No risk no Ferrari 🚀\n`;
     alertText += `${getSiteConfig().promoUrl}`;
