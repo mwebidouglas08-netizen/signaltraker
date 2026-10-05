@@ -52,9 +52,15 @@ function sanitizeTelegramCredentials(botToken: string, chatId: string) {
     return { cleanToken, cleanChatId };
   }
 
-  // Positive number → add -100 prefix exactly once
+  // Positive number → add the -100 block, but never double-prefix:
+  // 1002590400274 already contains the 100 block (only "-" is missing),
+  // while a short value like 2590400274 still needs the full -100.
   if (/^\d+$/.test(cleanChatId)) {
-    cleanChatId = "-100" + cleanChatId;
+    if (cleanChatId.startsWith("100") && cleanChatId.length >= 12) {
+      cleanChatId = "-" + cleanChatId;
+    } else {
+      cleanChatId = "-100" + cleanChatId;
+    }
     return { cleanToken, cleanChatId };
   }
 

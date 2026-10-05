@@ -61,7 +61,7 @@ async function safeTelegramFetch(
 
 // ─── Channel ID sanitizer ─────────────────────────────────────────────────────
 // RULE: if user provides a negative number, trust it exactly.
-//       if positive digits, add -100 once.
+//       if positive digits, add the -100 block unless already present.
 //       if text, add @ prefix.
 function sanitizeTelegramCredentials(botToken: string, chatId: string) {
   let cleanToken = (botToken || "").trim().replace(/\s+/g, "");
@@ -93,9 +93,15 @@ function sanitizeTelegramCredentials(botToken: string, chatId: string) {
     return { cleanToken, cleanChatId };
   }
 
-  // Positive number → add -100 prefix once
+  // Positive number → add the -100 block, but never double-prefix:
+  // 1002590400274 already contains the 100 block (only "-" is missing),
+  // while a short value like 2590400274 still needs the full -100.
   if (/^\d+$/.test(cleanChatId)) {
-    cleanChatId = "-100" + cleanChatId;
+    if (cleanChatId.startsWith("100") && cleanChatId.length >= 12) {
+      cleanChatId = "-" + cleanChatId;
+    } else {
+      cleanChatId = "-100" + cleanChatId;
+    }
     return { cleanToken, cleanChatId };
   }
 
@@ -595,19 +601,24 @@ function buildServerSignal(cfg: CronConfig): string {
 }
 
 // ── Validate and return a config object from any source (configure or cron) ──
+// Accepts chatId as string OR number (some HTTP clients drop the quotes and
+// send {"chatId": -100123...} as JSON numeric — still a valid destination).
 function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false; error: string } {
-  const { botToken, chatId } = body;
-  if (!botToken || typeof botToken !== "string" || !botToken.trim()) {
+  const rawToken = (body || {}).botToken;
+  const rawChat = (body || {}).chatId;
+  const tokenStr = typeof rawToken === "string" ? rawToken.trim() : String(rawToken ?? "").trim();
+  const chatStr = typeof rawChat === "string" ? rawChat.trim() : String(rawChat ?? "").trim();
+  if (!tokenStr) {
     return { ok: false, error: "botToken is required" };
   }
-  if (!chatId || typeof chatId !== "string" || !chatId.trim()) {
+  if (!chatStr || chatStr === "undefined" || chatStr === "null") {
     return { ok: false, error: "chatId is required" };
   }
   return {
     ok: true,
     cfg: {
-      botToken: botToken.trim(),
-      chatId: chatId.trim(),
+      botToken: tokenStr,
+      chatId: chatStr,
       chatTitle: body.chatTitle || "",
       siteName: body.siteName || "kicktrade",
       promoUrl: body.promoUrl || "http://kicktrade.site",
@@ -669,6 +680,11 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
       return;
     }
     cfg.chatTitle = chat.result?.title || chat.result?.username || cfg.chatTitle;
+    // Canonicalize: the payloads carry EXACTLY what Telegram accepted, so a
+    // pasted body can never point at a differently-formatted ("different")
+    // channel than the one verified here.
+    cfg.botToken = cleanToken;
+    cfg.chatId = cleanChatId;
   } catch (err: any) {
     res.status(500).json({ error: `Could not reach Telegram to validate: ${err.message}` });
     return;
@@ -714,9 +730,12 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
     // kept for backwards compatibility with old SettingsView versions
     cronPayload: signalPayload,
     // Echo of exactly what got embedded in the payloads, so the UI can show
-    // the user what cron-job.org will send (proves token/chat correctness).
+    // the user what cron-job.org will send (proves token/chat correctness)
+    // and normalize its own saved config to the same canonical values.
     embeddedChatId: cfg.chatId,
     embeddedChatTitle: cfg.chatTitle || "",
+    canonicalBotToken: cfg.botToken,
+    canonicalChatId: cfg.chatId,
     tokenPrefix: cfg.botToken.slice(0, 6) + "...",
     hostWarning: isLocal
       ? "You enabled from localhost — cron-job.org cannot reach localhost. Redeploy, open the LIVE app URL, and click Enable there so the cron URL is public."
@@ -905,12 +924,14 @@ async function handleCronBroadcast(req: any, res: any) {
     totalSentThisSession += 1;
     lastSendError = null;
 
-    console.log(`[AutoBroadcast] ${messageType} sent. messageId=${data.result.message_id} total=${totalSentThisSession}`);
+    console.log(`[AutoBroadcast] ${messageType} sent to ${cleanChatId}. messageId=${data.result.message_id} total=${totalSentThisSession}`);
     res.json({
       success: true,
       type: messageType,
       messageId: data.result.message_id,
       totalSent: totalSentThisSession,
+      chatIdUsed: cleanChatId,
+      chatTitle: data.result.chat?.title || data.result.chat?.username || cfg.chatTitle || "",
     });
   } catch (err: any) {
     lastSendError = err.message;

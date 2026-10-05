@@ -194,9 +194,15 @@ function sanitizeTelegramCredentials(botToken: string, chatId: string) {
     return { cleanToken, cleanChatId };
   }
 
-  // 5. Positive number → add -100 prefix exactly once
+  // 5. Positive number → add the -100 block, but never double-prefix:
+  // 1002590400274 already contains the 100 block (only "-" is missing),
+  // while a short value like 2590400274 still needs the full -100.
   if (/^\d+$/.test(cleanChatId)) {
-    cleanChatId = "-100" + cleanChatId;
+    if (cleanChatId.startsWith("100") && cleanChatId.length >= 12) {
+      cleanChatId = "-" + cleanChatId;
+    } else {
+      cleanChatId = "-100" + cleanChatId;
+    }
     return { cleanToken, cleanChatId };
   }
 
@@ -768,18 +774,21 @@ function buildAlertMessage(cfg: CronConfig): string {
 }
 
 function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false; error: string } {
-  const { botToken, chatId } = body || {};
-  if (!botToken || typeof botToken !== "string" || !botToken.trim()) {
+  const rawToken = (body || {}).botToken;
+  const rawChat = (body || {}).chatId;
+  const tokenStr = typeof rawToken === "string" ? rawToken.trim() : String(rawToken ?? "").trim();
+  const chatStr = typeof rawChat === "string" ? rawChat.trim() : String(rawChat ?? "").trim();
+  if (!tokenStr) {
     return { ok: false, error: "botToken is required" };
   }
-  if (!chatId || typeof chatId !== "string" || !String(chatId).trim()) {
+  if (!chatStr || chatStr === "undefined" || chatStr === "null") {
     return { ok: false, error: "chatId is required" };
   }
   return {
     ok: true,
     cfg: {
-      botToken: String(botToken).trim(),
-      chatId: String(chatId).trim(),
+      botToken: tokenStr,
+      chatId: chatStr,
       chatTitle: (body as any).chatTitle || "",
       siteName: (body as any).siteName || "kicktrade",
       promoUrl: (body as any).promoUrl || "http://kicktrade.site",
@@ -847,6 +856,11 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
       return;
     }
     cfg.chatTitle = chat.result?.title || chat.result?.username || cfg.chatTitle;
+    // Canonicalize: the payloads carry EXACTLY what Telegram accepted, so a
+    // pasted body can never point at a differently-formatted ("different")
+    // channel than the one verified here.
+    cfg.botToken = cleanToken;
+    cfg.chatId = cleanChatId;
   } catch (err: any) {
     res.status(500).json({ error: `Could not reach Telegram to validate: ${err.message}` });
     return;
@@ -885,6 +899,8 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
     intervalMinutes,
     embeddedChatId: cfg.chatId,
     embeddedChatTitle: cfg.chatTitle || "",
+    canonicalBotToken: cfg.botToken,
+    canonicalChatId: cfg.chatId,
     tokenPrefix: cfg.botToken.slice(0, 6) + "...",
     hostWarning: isLocal
       ? "You enabled from localhost — cron-job.org cannot reach localhost. Redeploy, open the LIVE app URL, and click Enable there so the cron URL is public."
@@ -986,7 +1002,14 @@ async function handleCronBroadcast(req: any, res: any) {
     lastSendTime = new Date().toISOString();
     totalSentThisSession += 1;
     lastSendError = null;
-    res.json({ success: true, type: messageType, messageId: data.result.message_id, totalSent: totalSentThisSession });
+    res.json({
+      success: true,
+      type: messageType,
+      messageId: data.result.message_id,
+      totalSent: totalSentThisSession,
+      chatIdUsed: cleanChatId,
+      chatTitle: data.result.chat?.title || data.result.chat?.username || cfg.chatTitle || "",
+    });
   } catch (err: any) {
     lastSendError = err.message;
     res.status(500).json({ success: false, error: err.message });

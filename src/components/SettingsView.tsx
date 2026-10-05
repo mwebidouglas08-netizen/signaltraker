@@ -186,6 +186,19 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
         setServerError(data.hostWarning);
       }
 
+      // Normalize the app's saved Telegram config to the canonical values
+      // Telegram verified (prevents manual sends going to a differently-
+      // formatted "other" channel than the cron bodies use).
+      if (data.canonicalChatId || data.canonicalBotToken) {
+        onChange({
+          ...config,
+          botToken: data.canonicalBotToken || config.botToken,
+          chatId: data.canonicalChatId || config.chatId,
+          chatTitle: data.embeddedChatTitle || config.chatTitle,
+          isConnected: true,
+        });
+      }
+
       setIsEnabled(true);
       localStorage.setItem("server_broadcast_enabled", "true");
       localStorage.setItem("server_broadcast_cron_url", data.cronUrl);
@@ -240,7 +253,7 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
       if (!res.ok || (data as any).success === false) {
         throw new Error((data as any).error || (data as any).hint || `Test failed (HTTP ${res.status}).`);
       }
-      setCronTestResult(`✅ ${which} test delivered to Telegram (messageId ${(data as any).messageId}). Your copied values are correct — now paste them into cron-job.org.`);
+      setCronTestResult(`✅ ${which} test delivered to "${(data as any).chatTitle || (data as any).chatIdUsed || "channel"}" (${(data as any).chatIdUsed || "id unknown"}, messageId ${(data as any).messageId}). Your copied values are correct — now paste them into cron-job.org.`);
       fetchStatus();
     } catch (err: any) {
       setCronTestResult(`❌ ${which} test failed: ${err.message || "unknown error"}`);

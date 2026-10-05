@@ -1052,7 +1052,7 @@ export default function App() {
           <div>
             <h2 className="text-xs font-bold uppercase tracking-widest text-[#2ac1f6]">Zeta Core Processor</h2>
             <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-              Live Feed Target: <span className="text-slate-200">{config.chatId || "-1002590400274"}</span> {config.isConnected && " &bull; Linked 🔗"}
+              Live Feed Target: <span className="text-slate-200">{config.chatId || "Not connected"}</span> {config.isConnected && " &bull; Linked 🔗"}
             </div>
           </div>
           <div className="flex items-center gap-3 text-xs">
