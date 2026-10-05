@@ -1,129 +1,132 @@
 # Keep the Bot Sending Signals After Logout — Setup Guide
 
-## What was actually broken
+Architecture: **stateless, no database required.** The bot token, channel ID
+and message style travel **inside every cron request body**, so the server
+never needs to remember anything. No Vercel KV / Redis / paid plan needed.
 
-There were **two separate bugs** stacking on top of each other:
-
-1. **State wasn't persisting.** The server-side "enabled" flag was being saved
-   to `/tmp` on Vercel's filesystem. Vercel serverless functions are
-   stateless — each request can run on a different physical machine, so the
-   file written when you clicked "Enable" was often invisible to the next
-   request (including the cron trigger). This made the toggle silently
-   revert to "off" almost immediately, regardless of login state.
-
-2. **The scheduler wasn't reliable.** GitHub Actions' `schedule:` trigger is
-   not guaranteed to fire on time, can be delayed 15–60+ minutes, and will
-   only run from your repo's default branch. If nothing pings the server,
-   nothing gets sent — independent of bug #1.
-
-Both are now fixed: state is stored in **Vercel KV** (a real persistent
-database, not a temp file), and the recommended scheduler is **cron-job.org**,
-a purpose-built pinger that fires within seconds, not GitHub Actions.
-
-## Important: what this *can* and *cannot* do
+What this can and cannot do:
 
 ✅ Signals keep sending after you **log out of the app** or **close your browser/tab**.
 ✅ Signals keep sending if **your phone or laptop is turned off**.
-❌ Signals **cannot** send while the **server itself** has no internet — no bot,
-anywhere, on any platform, can deliver a message to Telegram without a network
-path to Telegram's servers. "Offline" always means *some* machine has to be online
-to do the sending; here, that machine is Vercel's server, not your device.
+❌ Signals **cannot** send while **no server is online** — some machine must
+reach Telegram's servers. Here that machine is Vercel's server (triggered by
+cron-job.org), not your device.
 
 ---
 
-## Step 1 — Provision persistent storage (required, ~3 minutes)
+## Step 1 — Deploy the app (required once)
 
-**Important:** Vercel's old "KV" product (Storage tab → Create Database → KV)
-was discontinued and no longer appears in the dashboard. The replacement is
-the **Upstash Redis** integration via the Vercel Marketplace — it's still
-free and works identically, just installed from a different place.
+1. Push this repo to GitHub and import it in Vercel.
+2. In Vercel → Settings → Environment Variables add:
+   - `GEMINI_API_KEY` = your Gemini key (for AI signal text; app still works
+     in template fallback mode without it).
+   - `ADMIN_USERNAME` / `ADMIN_PASSWORD` (optional; default `admin` / `password`).
+   - `CRON_SECRET` (optional but recommended): any random string, e.g.
+     `openssl rand -hex 16`. If set, every cron call must send header
+     `Authorization: Bearer <that-value>`.
+3. Deploy. Note your URL, e.g. `https://your-app.vercel.app` (no trailing slash).
+4. Verify in your browser:
+   - `https://your-app.vercel.app/api/health` → `{"status":"ok",...}`
+   - `https://your-app.vercel.app/api/autobroadcast/status` →
+     `{"serverReachable":true,"persistenceMode":"stateless-config-in-request",...}`
+   - `https://your-app.vercel.app/api/autobroadcast/diagnose` → reachable.
 
-1. Go to [vercel.com/marketplace/upstash](https://vercel.com/marketplace/upstash)
-2. Click **Install** (or **Add Integration**)
-3. When prompted, choose to let **Vercel manage the Upstash account for you**
-   (simplest option — no separate Upstash signup needed)
-4. Select **Redis** as the product
-5. Pick a name (e.g. `signal-state`), choose the free plan, and create it
-6. On the next screen, **connect it to your `signaltraker` project**
-7. Vercel automatically injects these environment variables into your project
-   (the exact names can vary slightly depending on the flow, so the app checks
-   for both):
-   - `KV_REST_API_URL` / `KV_REST_API_TOKEN`, **or**
-   - `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`
-8. Go to **Deployments** → **⋯** on the latest deployment → **Redeploy**
-   (environment variables only take effect on a fresh deployment)
-
-**How to verify this worked — do this before anything else:**
-Open `https://your-app.vercel.app/api/autobroadcast/diagnose` in your browser.
-You should see `"willUsePersistentStorage": true`. If it's `false`, check the
-individual `*_present` fields to see exactly which variable is missing, fix
-that in Vercel → Settings → Environment Variables, and redeploy again.
-
-Then open `https://your-app.vercel.app/api/autobroadcast/status` and confirm
-`"persistenceMode": "kv"`.
+If `/api/*` returns HTML instead of JSON, the API route is not deployed
+(check `vercel.json` rewrites and that `api/index.ts` deployed).
 
 ---
 
-## Step 2 — Set up the external pinger (required)
+## Step 2 — Connect Telegram in the app (required once)
 
-1. Go to [cron-job.org](https://cron-job.org) and create a free account (no card needed)
-2. Click **Create cronjob**
-3. **Title:** Signal Auto-Broadcast
-4. **URL:** `https://your-app.vercel.app/api/cron/auto-broadcast`
-   (replace with your actual deployed domain)
-5. **Schedule:** Every 1 minute
-6. Save
+1. Open the app → **Settings** (or the Telegram panel).
+2. Bot token: from Telegram → `@BotFather` → `/newbot` → paste the token
+   exactly (`123456789:ABCdef...`, no spaces).
+3. Channel: Channel Settings → Admins → Add your bot as **Admin** with
+   **Post Messages** permission.
+4. Channel ID:
+   - Public: `@yourchannel`
+   - Private: forward any channel post to `@username_to_id_bot` → copy the
+     numeric ID **exactly**, e.g. `-1001234567890` (keep the minus sign —
+     the app never adds/removes `-100` on negative IDs).
+5. Click **Send Test Message**. You must see it in the channel before continuing.
 
-This service is built specifically for this purpose and fires reliably within
-seconds of the scheduled time — unlike GitHub Actions' schedule trigger, which
-is explicitly documented as best-effort and can be delayed by up to an hour.
-
-*(Optional, recommended for security)* In Vercel, add an environment variable
-`CRON_SECRET` with any random value you choose. Then in cron-job.org, add a
-custom request header: `Authorization: Bearer your-secret-value`. This stops
-anyone else from triggering your broadcasts if they guess your URL.
-
----
-
-## Step 3 — Enable in the app
-
-1. Open the app → **Settings**
-2. Make sure your Bot Token and Channel ID are connected at the top of the page
-3. Scroll to **Server-Side Auto-Broadcast** → set your interval → click
-   **Enable Server-Side Broadcasting**
-4. You should see "🟢 Running on Server" — this state is now stored in Vercel
-   KV and will be read correctly by every future cron ping, regardless of
-   whether you are logged in.
-
-To stop it permanently, click **Disconnect (Stop Auto-Broadcast)** — this is
-the only thing that will stop it going forward (besides disconnecting your bot).
+Common Telegram errors:
+- `chat not found` → wrong Channel ID, or bot is not an admin yet.
+- `bot was blocked / not a member / needs admin` → re-add bot as admin.
+- `unauthorized` → wrong bot token.
 
 ---
 
-## What "Persistent storage (Vercel KV) is not configured" means
+## Step 3 — Enable server broadcasting + set up cron-job.org (required once)
 
-If your scheduler (cron-job.org or GitHub Actions) shows this exact error in
-its response body, it means Step 1 above has not been completed yet — the
-server cannot find either set of Redis environment variables. This is not a
-bug; the server is correctly refusing to report "enabled" as reliable when it
-has nowhere durable to store that state. Visit
-`https://your-app.vercel.app/api/autobroadcast/diagnose` to see precisely
-which environment variable is missing, then complete Step 1.
+1. In the app → **Settings → Server-Side Auto-Broadcast** → set interval
+   (e.g. every 2 min) → **Enable Server-Side Broadcasting**.
+2. Click **Show Setup Values**. You get 3 things:
+   - **Cron URL** (same for both jobs):
+     `https://your-app.vercel.app/api/cron/auto-broadcast`
+   - **Cron Job 1 body** (`{"type":"alert",...}`)
+   - **Cron Job 2 body** (`{"type":"signal",...}`)
+3. Go to [cron-job.org](https://cron-job.org) → free account → **Create cronjob** twice:
+
+   **Cron Job 1 — Alert (fires first)**
+   - Title: `Signal Alert`
+   - URL: `<cronUrl>` from step 2
+   - Schedule: your interval (e.g. every 2 minutes)
+   - Request method: **POST**
+   - Headers: `Content-Type: application/json`
+     (+ `Authorization: Bearer <CRON_SECRET>` if you set one in Vercel)
+   - Body: paste the **alertPayload** exactly
+   - Save. Note the time you saved it.
+
+   **Cron Job 2 — Signal (fires 1 min after alert)**
+   - Same as above, but Body = **signalPayload**.
+   - Create/save it **exactly 1 minute after Job 1** so the two jobs stay
+     offset by 1 minute forever (alert → 1 min later → signal, repeating).
+
+4. In cron-job.org → History/Logs confirm both jobs return HTTP 200 with
+   `{"success":true,...}`.
+
+That's it — signals now send 24/7 even while you are logged out.
+
+> GET fallback: the endpoint also accepts GET with
+> `?botToken=...&chatId=...&type=signal` query params, so a job accidentally
+> left on GET still works. POST with JSON body is the supported mode.
+
+---
+
+## Optional — GitHub Actions fallback scheduler
+
+If you prefer not to rely on cron-job.org, the repo includes
+`.github/workflows/auto-broadcast-cron.yml` (every 2 min, correct POST with
+JSON body). To use it, add repo Secrets `APP_URL`, `BOT_TOKEN`, `CHAT_ID`
+(and `CRON_SECRET` if set in Vercel), then enable the workflow in the
+Actions tab. You can run **both** schedulers, but normally one is enough —
+running both at the same interval doubles the messages.
+
+---
 
 ## Troubleshooting
 
-**Status still shows "memory-fallback-not-persistent" after Step 1:**
-Double-check the KV store shows as "Connected" under your project's Storage
-tab, and that you redeployed after connecting it. Environment variables only
-take effect on new deployments.
-
 **cron-job.org shows failed executions:**
-Open the execution log in cron-job.org and check the HTTP response body — the
-`/api/cron/auto-broadcast` endpoint returns a JSON error describing exactly
-what's wrong (e.g. bot token invalid, KV not configured, etc).
+Open its execution log and read the JSON body:
+- `botToken is required` / `chatId is required` → the job's Body is empty or
+  not valid JSON. Re-paste the exact payload from Settings.
+- `Unauthorized cron trigger` → add the `Authorization: Bearer ...` header
+  with the same `CRON_SECRET` value as in Vercel, or remove `CRON_SECRET`
+  from Vercel if you don't want auth.
+- Telegram `chat not found / forbidden` → see Step 2 errors above.
 
-**Signals send while logged in but stop within a minute of logging out:**
-This was bug #1 above (state not persisting). If you've completed Step 1 and
-still see this, check `/api/autobroadcast/status` immediately after enabling —
-if `enabled: true` is not present, the KV write itself may be failing; check
-your Vercel function logs for `[AutoBroadcast] KV write error`.
+**Signals send while the app is open but not via cron:**
+The in-browser scanner only runs while the tab is open. After logout only
+cron-job.org (or GitHub Actions) can trigger sends — confirm at least one
+scheduler shows HTTP 200 `success:true` history.
+
+**Status shows no `lastRunAt`:**
+No cron request has successfully delivered yet (each deploy resets the
+in-memory counter — this is expected on serverless). Fix the scheduler, not
+the app.
+
+**Local `npm run dev` API 404s:**
+`server.ts` now mirrors all `api/index.ts` routes. If you still see HTML
+instead of JSON on `/api/*` locally, restart `npm run dev` (Express runs on
+`:3000`, Vite proxies `/api` there).

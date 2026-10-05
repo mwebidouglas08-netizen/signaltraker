@@ -1,40 +1,50 @@
 name: Auto-Broadcast Signal Trigger
 
-# This workflow keeps your Telegram bot sending signals even after you log out
-# of the app or close your browser. GitHub's servers run this on a schedule
-# completely independently of your app session — it requires no third-party
-# service and no Vercel plan upgrade.
+# Backup scheduler: keeps Telegram signals sending even when your browser is
+# closed. The primary/recommended scheduler is cron-job.org (see SETUP.md),
+# this workflow is a free fallback that runs from GitHub's servers.
 #
 # SETUP (one-time):
-# 1. Go to your GitHub repo → Settings → Secrets and variables → Actions
-# 2. Click "New repository secret"
-# 3. Name:  APP_URL
-#    Value: https://your-deployed-app.vercel.app   (no trailing slash)
-# 4. (Optional but recommended) If you set CRON_SECRET in Vercel's
-#    environment variables, also add a secret here named CRON_SECRET
-#    with the same value, so only this workflow can trigger broadcasts.
-# 5. Commit this file. Go to the "Actions" tab in GitHub and confirm the
-#    "Auto-Broadcast Signal Trigger" workflow appears and is enabled.
+# 1. Deploy the app to Vercel first and note its URL, e.g.
+#    https://your-app.vercel.app  (no trailing slash)
+# 2. Go to GitHub repo → Settings → Secrets and variables → Actions
+# 3. Add these repository secrets:
+#    Name:  APP_URL     Value: https://your-app.vercel.app
+#    Name:  BOT_TOKEN   Value: <bot token from @BotFather, e.g. 123456:ABC...>
+#    Name:  CHAT_ID     Value: <channel id, e.g. -1001234567890 or @channel>
+#    Optional — must match Vercel env CRON_SECRET if you set one:
+#    Name:  CRON_SECRET Value: <same random string as in Vercel>
+# 4. Commit this file. Go to the "Actions" tab and confirm the workflow is enabled.
+# 5. Use "Run workflow" (workflow_dispatch) once to send a test signal.
 #
-# That's it — signals will now keep sending every 2 minutes, 24/7, even
-# while you are completely logged out of the app.
+# How it works:
+# - Every 2 minutes GitHub POSTs JSON {botToken, chatId, type:"signal"} to
+#   /api/cron/auto-broadcast. The server is stateless: everything it needs
+#   travels in the request body, so no database is required.
+# - Alternates alert/signal by minute parity so the channel gets the same
+#   1-minute warning → signal rhythm as the cron-job.org 2-job setup.
 
 on:
   schedule:
-    # Runs every 2 minutes. GitHub Actions free tier supports this on
-    # public repos unconditionally, and on private repos within the
-    # free included minutes (this job uses well under 1 minute per run).
     - cron: "*/2 * * * *"
-  workflow_dispatch: {} # allows manually triggering a test run from the Actions tab
+  workflow_dispatch: {}
 
 jobs:
   trigger-broadcast:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping auto-broadcast endpoint
+      - name: Ping auto-broadcast endpoint (POST with JSON body)
         run: |
           if [ -z "${{ secrets.APP_URL }}" ]; then
             echo "❌ APP_URL secret is not set. Go to repo Settings → Secrets and variables → Actions and add APP_URL with your deployed app's URL."
+            exit 1
+          fi
+          if [ -z "${{ secrets.BOT_TOKEN }}" ]; then
+            echo "❌ BOT_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          if [ -z "${{ secrets.CHAT_ID }}" ]; then
+            echo "❌ CHAT_ID secret is not set. Add it in repo Settings → Secrets and variables → Actions."
             exit 1
           fi
 
@@ -44,10 +54,28 @@ jobs:
             AUTH_HEADER="X-No-Auth: true"
           fi
 
-          echo "Pinging ${{ secrets.APP_URL }}/api/cron/auto-broadcast ..."
+          # Alternate phase by minute: even minute = signal, odd minute = alert.
+          # (Any deterministic alternation works — server defaults missing type to signal.)
+          MINUTE=$(date -u +%M)
+          if [ $((10#$MINUTE % 2)) -eq 0 ]; then
+            MSG_TYPE="signal"
+          else
+            MSG_TYPE="alert"
+          fi
+
+          BODY=$(jq -n \
+            --arg bt "${{ secrets.BOT_TOKEN }}" \
+            --arg ci "${{ secrets.CHAT_ID }}" \
+            --arg ty "$MSG_TYPE" \
+            '{botToken:$bt, chatId:$ci, type:$ty, siteName:"kicktrade", promoUrl:"http://kicktrade.site", botName:"USE KICKTRADE BOT", botSignature:"kicktrade Over/Under Bot", hashtags:"#TradingSignal #kicktrade #Signals", activeContracts:["UNDER 7","UNDER 8","OVER 2","OVER 3"]}')
+
+          echo "Pinging ${{ secrets.APP_URL }}/api/cron/auto-broadcast (type=$MSG_TYPE) ..."
 
           HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" \
+            -X POST \
             -H "$AUTH_HEADER" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
             "${{ secrets.APP_URL }}/api/cron/auto-broadcast")
 
           echo "HTTP Status: $HTTP_STATUS"

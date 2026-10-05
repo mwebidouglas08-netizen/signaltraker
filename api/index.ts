@@ -713,6 +713,23 @@ function buildAlertMessage(cfg: CronConfig): string {
   );
 }
 
+// ── Optional CRON_SECRET protection ──────────────────────────────────────────
+// If the CRON_SECRET env var is set on Vercel, every call to
+// /api/cron/auto-broadcast must carry `Authorization: Bearer <secret>`.
+// If it is NOT set, the endpoint stays open (zero-setup default).
+function checkCronAuth(req: any): { ok: true } | { ok: false; error: string } {
+  const expected = (process.env.CRON_SECRET || "").trim();
+  if (!expected) return { ok: true };
+  const got =
+    (req.headers.authorization || req.headers.Authorization || "") as string;
+  if (got === `Bearer ${expected}`) return { ok: true };
+  return {
+    ok: false,
+    error:
+      "Unauthorized cron trigger (bad or missing CRON_SECRET). Add header 'Authorization: Bearer <your-secret>' in cron-job.org.",
+  };
+}
+
 // ── /api/cron/auto-broadcast ──────────────────────────────────────────────────
 // STATELESS PHASE DESIGN: the caller (cron-job.org) encodes whether to send
 // an alert or a signal via the "type" field in the request body.
@@ -722,18 +739,42 @@ function buildAlertMessage(cfg: CronConfig): string {
 //   Cron Job 2 (signal) → body includes type:"signal" — fires at :01, :06, :11 ...
 // This is the only approach that works reliably on Vercel since module-level
 // variables reset on every cold start (each cron ping = fresh instance).
-app.post("/api/cron/auto-broadcast", async (req, res) => {
-  const parsed = parseCronConfig(req.body);
+//
+// IMPORTANT cron-job.org settings (both jobs):
+//   Method: POST | URL: <cronUrl> | Content-Type: application/json
+//   Body: <alertPayload> for Job 1, <signalPayload> for Job 2
+// A GET handler is also provided below so a misconfigured job (GET with no
+// body) returns a clear JSON error instead of an HTML 404.
+async function handleCronBroadcast(req: any, res: any) {
+  const auth = checkCronAuth(req);
+  if (!auth.ok) {
+    lastSendError = auth.error;
+    res.status(401).json({ success: false, error: auth.error });
+    return;
+  }
+
+  // Accept config from POST JSON body first, fall back to query params (?botToken=&chatId=&type=)
+  // so a simple GET job can still work for users who can't set a request body.
+  const source =
+    req.body && typeof req.body === "object" && Object.keys(req.body).length > 0
+      ? req.body
+      : req.query || {};
+  const parsed = parseCronConfig(source);
   if (!parsed.ok) {
     lastSendError = parsed.error;
-    res.status(400).json({ success: false, error: parsed.error });
+    res.status(400).json({
+      success: false,
+      error: parsed.error,
+      hint: "This endpoint needs POST with JSON body {botToken, chatId, type:'alert'|'signal', ...}. Copy the exact URL + Body from Settings → Server-Side Auto-Broadcast → Show Setup Values. If your cron service can only send GET, append ?botToken=...&chatId=...&type=signal to the URL instead.",
+    });
     return;
   }
 
   const { cfg } = parsed;
   // "type" comes from the cron-job.org request body — either "alert" or "signal"
   // If missing (old single-cron setup), default to "signal" so it still works.
-  const messageType: "alert" | "signal" = req.body.type === "alert" ? "alert" : "signal";
+  const messageType: "alert" | "signal" =
+    (source as any).type === "alert" ? "alert" : "signal";
 
   try {
     const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(cfg.botToken, cfg.chatId);
@@ -775,7 +816,13 @@ app.post("/api/cron/auto-broadcast", async (req, res) => {
     console.error(`[AutoBroadcast] Error: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   }
-});
+}
+
+app.post("/api/cron/auto-broadcast", handleCronBroadcast);
+// GET is supported too (query-string mode) so a cron-job.org job left on the
+// default GET method returns JSON guidance instead of an HTML 404, and can
+// still deliver if ?botToken=&chatId=&type= are present.
+app.get("/api/cron/auto-broadcast", handleCronBroadcast);
 
 // ─── Scrape linked site to detect its name and bots ───────────────────────────
 app.post("/api/site/detect", async (req, res) => {

@@ -133,8 +133,11 @@ app.post("/api/login", (req, res) => {
 });
 
 // Helper to sanitize Telegram bot credentials and channel identifiers
+// FIXED: if the user provides a negative number, trust it exactly as-is.
+// The old version re-prefixed "-123..." into "-100123..." producing
+// malformed IDs like -1001001002590400274 and "chat not found" errors.
 function sanitizeTelegramCredentials(botToken: string, chatId: string) {
-  let cleanToken = (botToken || "").trim();
+  let cleanToken = (botToken || "").trim().replace(/\s+/g, "");
 
   // 1. Extract bot token if they pasted a full URL
   if (cleanToken.includes("telegram.org/bot")) {
@@ -145,18 +148,16 @@ function sanitizeTelegramCredentials(botToken: string, chatId: string) {
     }
   }
 
-  // 2. Strip leading "bot" prefix if added manually
-  if (cleanToken.toLowerCase().startsWith("bot")) {
-    const withoutBot = cleanToken.substring(3);
-    if (/^\d+/.test(withoutBot)) {
-      cleanToken = withoutBot;
-    }
+  // 2. Strip leading "bot" prefix if added manually (e.g. "bot123:ABC")
+  if (cleanToken.toLowerCase().startsWith("bot") && /^\d+:/.test(cleanToken.substring(3))) {
+    cleanToken = cleanToken.substring(3);
   }
 
   let cleanChatId = (chatId || "")
     .trim()
     .replace(/\s+/g, "")
-    .replace(/['"]/g, "");
+    .replace(/['"]/g, "")
+    .replace(/\/$/, "");
 
   // 3. Extract channel handle from t.me link
   if (cleanChatId.includes("t.me/")) {
@@ -167,29 +168,23 @@ function sanitizeTelegramCredentials(botToken: string, chatId: string) {
         cleanChatId = handle.startsWith("@") ? handle : "@" + handle;
       }
     }
+    return { cleanToken, cleanChatId };
   }
 
-  // 4. Remove trailing slashes
-  cleanChatId = cleanChatId.replace(/\/$/, "");
-
-  // 5. Prepend @ for alphanumeric handles
-  if (
-    cleanChatId &&
-    !cleanChatId.startsWith("@") &&
-    !cleanChatId.startsWith("-") &&
-    isNaN(Number(cleanChatId))
-  ) {
-    cleanChatId = "@" + cleanChatId;
+  // 4. Negative number → trust exactly as-is (user copied from Telegram)
+  if (cleanChatId.startsWith("-") && /^-\d+$/.test(cleanChatId)) {
+    return { cleanToken, cleanChatId };
   }
 
-  // 6. Auto-correct numeric channel IDs to have -100 prefix
-  if (/^\d{7,20}$/.test(cleanChatId)) {
+  // 5. Positive number → add -100 prefix exactly once
+  if (/^\d+$/.test(cleanChatId)) {
     cleanChatId = "-100" + cleanChatId;
-  } else if (
-    /^-\d{7,20}$/.test(cleanChatId) &&
-    !cleanChatId.startsWith("-100")
-  ) {
-    cleanChatId = "-100" + cleanChatId.substring(1);
+    return { cleanToken, cleanChatId };
+  }
+
+  // 6. Alphanumeric handle → ensure @ prefix
+  if (cleanChatId && !cleanChatId.startsWith("@")) {
+    cleanChatId = "@" + cleanChatId;
   }
 
   return { cleanToken, cleanChatId };
@@ -534,6 +529,382 @@ Output format: Please output a valid JSON object with exactly two keys: "signal"
     });
   }
 });
+
+// ─── Telegram discover / verify-chat / delete (parity with api/index.ts) ─────
+// These were missing in server.ts, so `npm run dev` returned HTML 404s for
+// the frontend while production (Vercel) worked. They are now defined here too.
+app.post("/api/telegram/discover", async (req, res) => {
+  const { botToken } = req.body;
+  if (!botToken) {
+    res.status(400).json({ error: "botToken is required" });
+    return;
+  }
+  const { cleanToken } = sanitizeTelegramCredentials(botToken, "placeholder");
+  try {
+    const meData = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getMe`,
+      { method: "GET" }
+    );
+    if (!meData.ok) {
+      res.status(400).json({
+        error: `Invalid bot token: ${meData.description || "Unauthorized"}. Get a fresh token from @BotFather.`,
+        tokenValid: false,
+      });
+      return;
+    }
+    const updatesData = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getUpdates?limit=100&allowed_updates=["my_chat_member","channel_post","message"]`,
+      { method: "GET" }
+    );
+    const channels: Array<{ id: string; title: string; type: string; username?: string }> = [];
+    const seen = new Set<string>();
+    if (updatesData.ok && Array.isArray(updatesData.result)) {
+      for (const update of updatesData.result) {
+        const chat =
+          update.channel_post?.chat ||
+          update.my_chat_member?.chat ||
+          update.message?.chat ||
+          update.edited_channel_post?.chat;
+        if (chat && !seen.has(String(chat.id))) {
+          seen.add(String(chat.id));
+          channels.push({
+            id: String(chat.id),
+            title: chat.title || chat.username || String(chat.id),
+            type: chat.type,
+            username: chat.username ? "@" + chat.username : undefined,
+          });
+        }
+      }
+    }
+    res.json({
+      tokenValid: true,
+      botName: meData.result.first_name,
+      botUsername: "@" + meData.result.username,
+      channels,
+      hint: channels.length === 0
+        ? "No channels found in recent updates. Add the bot as Admin to your channel and send a message there, then try again."
+        : `Found ${channels.length} channel(s).`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Discovery failed" });
+  }
+});
+
+app.post("/api/telegram/verify-chat", async (req, res) => {
+  const { botToken, chatId } = req.body;
+  if (!botToken || !chatId) {
+    res.status(400).json({ error: "botToken and chatId are required" });
+    return;
+  }
+  const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(botToken, chatId);
+  try {
+    const data = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getChat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: cleanChatId }),
+      }
+    );
+    if (!data.ok) {
+      res.status(400).json({
+        found: false,
+        error: data.description,
+        chatId: cleanChatId,
+        advice: buildTelegramErrorAdvice(data, cleanChatId),
+      });
+      return;
+    }
+    res.json({
+      found: true,
+      chatId: String(data.result.id),
+      title: data.result.title || data.result.username,
+      type: data.result.type,
+      username: data.result.username ? "@" + data.result.username : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/delete", async (req, res) => {
+  const { botToken, chatId, messageId } = req.body;
+  if (!botToken || !chatId || !messageId) {
+    res.status(400).json({ error: "botToken, chatId, and messageId are required" });
+    return;
+  }
+  const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(botToken, chatId);
+  try {
+    const data = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/deleteMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: cleanChatId, message_id: Number(messageId) }),
+      }
+    );
+    if (!data.ok) {
+      const desc = (data.description || "").toLowerCase();
+      const alreadyGone = desc.includes("message to delete not found") || desc.includes("message can't be deleted");
+      res.json({ success: alreadyGone, alreadyGone, error: data.description });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to delete message" });
+  }
+});
+
+app.post("/api/site/detect", async (req, res) => {
+  const { siteUrl } = req.body;
+  if (!siteUrl) {
+    res.status(400).json({ error: "siteUrl is required" });
+    return;
+  }
+  let url = siteUrl.trim();
+  if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://" + url;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; SignalBot/1.0)", Accept: "text/html,application/xhtml+xml" },
+    });
+    clearTimeout(timeout);
+    const html = await response.text();
+    let siteName = "";
+    const titleMatch = html.match(/<title[^>]*>([^<]{1,120})<\/title>/i);
+    if (titleMatch) siteName = titleMatch[1].replace(/\s+/g, " ").trim();
+    if (!siteName) {
+      try { siteName = new URL(url).hostname.replace(/^www\./, ""); } catch { siteName = url; }
+    }
+    res.json({ success: true, siteUrl: url, siteName, description: "", bots: [], botCount: 0 });
+  } catch (err: any) {
+    res.status(err.name === "AbortError" ? 408 : 500).json({ error: `Failed to reach the site: ${err.message}` });
+  }
+});
+
+// ─── SERVER-SIDE AUTO-BROADCAST (stateless, parity with api/index.ts) ─────────
+const MARKET_NAMES = [
+  "VOLATILITY 10 INDEX", "VOLATILITY 25 INDEX", "VOLATILITY 50 INDEX",
+  "VOLATILITY 75 INDEX", "VOLATILITY 100 INDEX", "VOLATILITY 100 (1s) INDEX",
+  "VOLATILITY 75 (1s) INDEX", "VOLATILITY 50 (1s) INDEX",
+  "JUMP 25 INDEX", "JUMP 50 INDEX",
+];
+
+interface CronConfig {
+  botToken: string;
+  chatId: string;
+  chatTitle?: string;
+  siteName: string;
+  promoUrl: string;
+  botName: string;
+  botSignature: string;
+  hashtags: string;
+  activeContracts: string[];
+}
+
+function buildServerSignal(cfg: CronConfig): string {
+  const market = MARKET_NAMES[Math.floor(Math.random() * MARKET_NAMES.length)];
+  const contract = cfg.activeContracts[Math.floor(Math.random() * cfg.activeContracts.length)] || "UNDER 7";
+  const strength = 85 + Math.floor(Math.random() * 14);
+  const entryDigitMap: Record<string, string> = {
+    "UNDER 9": "9", "UNDER 8": "9", "UNDER 7": "9", "UNDER 6": "8",
+    "OVER 1": "0", "OVER 2": "1", "OVER 3": "2", "OVER 4": "3",
+  };
+  const entryDigit = entryDigitMap[contract] || "9";
+  const strategy = contract.startsWith("UNDER") ? "Second Least Digit" : "Over Digit Threshold";
+  return (
+    `<b>🔔 NEW TRADING SIGNAL 🔔</b>\n\n` +
+    `<b>${market}</b>\n\n` +
+    `📈 <b>${contract.toUpperCase()}</b>\n` +
+    `⚡ <b>Strategy:</b> ${strategy}\n\n` +
+    `🎯 <b>Entry Instructions:</b>\n\n` +
+    `<b>${cfg.botName}</b>\n` +
+    `💹 <b>Trade:</b> ${contract}\n` +
+    `🔑 <b>Entry Digit:</b> <code>${entryDigit}</code>\n` +
+    `⭐ <b>Confidence:</b> ${strength}%\n\n` +
+    `${cfg.promoUrl}\n\n` +
+    `⚠️ <b>Risk Management:</b>\n` +
+    `• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs\n\n` +
+    `⏰ <b>Time:</b> ${new Date().toUTCString()}\n\n` +
+    `🤖 Generated by ${cfg.botSignature}\n` +
+    `${cfg.hashtags}`
+  );
+}
+
+function buildAlertMessage(cfg: CronConfig): string {
+  return (
+    `🚨 <b>ALERT TO ALL ${cfg.siteName.toUpperCase()} MEMBERS 🚨</b>\n\n` +
+    `⚠ In just 1 minute, a new signal will be sent!\n` +
+    `📢 <b>Be ready and standby!</b>\n\n` +
+    `🖥 <b>Go to:</b> ${cfg.promoUrl}\n` +
+    `🤖 <b>Load your bot:</b> <code>${cfg.botName}</code>\n\n` +
+    `✅ Make sure your settings are ready…\n` +
+    `🚀 Let's catch this trade together!\n\n` +
+    `#StayAlert #${cfg.siteName.replace(/\s+/g, "").toLowerCase()}signal 🔥📈\n` +
+    `We either go home or go hard 💸\n` +
+    `No risk no Ferrari 🚀\n` +
+    cfg.promoUrl
+  );
+}
+
+function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false; error: string } {
+  const { botToken, chatId } = body || {};
+  if (!botToken || typeof botToken !== "string" || !botToken.trim()) {
+    return { ok: false, error: "botToken is required" };
+  }
+  if (!chatId || typeof chatId !== "string" || !String(chatId).trim()) {
+    return { ok: false, error: "chatId is required" };
+  }
+  return {
+    ok: true,
+    cfg: {
+      botToken: String(botToken).trim(),
+      chatId: String(chatId).trim(),
+      chatTitle: (body as any).chatTitle || "",
+      siteName: (body as any).siteName || "kicktrade",
+      promoUrl: (body as any).promoUrl || "http://kicktrade.site",
+      botName: (body as any).botName || "USE KICKTRADE BOT",
+      botSignature: (body as any).botSignature || "kicktrade Over/Under Bot",
+      hashtags: (body as any).hashtags || "#TradingSignal #kicktrade #Signals",
+      activeContracts: Array.isArray((body as any).activeContracts) && (body as any).activeContracts.length > 0
+        ? (body as any).activeContracts
+        : ["UNDER 7", "UNDER 8", "OVER 2", "OVER 3"],
+    },
+  };
+}
+
+function checkCronAuth(req: any): { ok: true } | { ok: false; error: string } {
+  const expected = (process.env.CRON_SECRET || "").trim();
+  if (!expected) return { ok: true };
+  const got = (req.headers.authorization || (req.headers as any).Authorization || "") as string;
+  if (got === `Bearer ${expected}`) return { ok: true };
+  return { ok: false, error: "Unauthorized cron trigger (bad or missing CRON_SECRET)." };
+}
+
+let lastSendTime: string | null = null;
+let totalSentThisSession = 0;
+let lastSendError: string | null = null;
+
+app.post("/api/autobroadcast/configure", (req, res) => {
+  const parsed = parseCronConfig(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+  const { cfg } = parsed;
+  const intervalMinutes = typeof req.body.intervalMinutes === "number" && req.body.intervalMinutes > 0
+    ? req.body.intervalMinutes
+    : 2;
+  const host = req.headers.host || "your-app.vercel.app";
+  const protocol = (host as string).includes("localhost") ? "http" : "https";
+  const cronUrl = `${protocol}://${host}/api/cron/auto-broadcast`;
+  const base = {
+    botToken: cfg.botToken,
+    chatId: cfg.chatId,
+    chatTitle: cfg.chatTitle,
+    siteName: cfg.siteName,
+    promoUrl: cfg.promoUrl,
+    botName: cfg.botName,
+    botSignature: cfg.botSignature,
+    hashtags: cfg.hashtags,
+    activeContracts: cfg.activeContracts,
+  };
+  res.json({
+    success: true,
+    cronUrl,
+    alertPayload: JSON.stringify({ ...base, type: "alert" }),
+    signalPayload: JSON.stringify({ ...base, type: "signal" }),
+    cronPayload: JSON.stringify({ ...base, type: "signal" }),
+    intervalMinutes,
+  });
+});
+
+app.get("/api/autobroadcast/status", (_req, res) => {
+  res.json({
+    serverReachable: true,
+    persistenceMode: "stateless-config-in-request",
+    currentPhase: "determined-by-request-body",
+    nextMessage: "alert fires from Cron Job 1, signal fires from Cron Job 2 — 1 minute later",
+    lastRunAt: lastSendTime,
+    totalSentThisSession,
+    lastError: lastSendError,
+  });
+});
+
+app.get("/api/autobroadcast/diagnose", (_req, res) => {
+  res.json({
+    architecture: "stateless — no KV or Redis required",
+    endpointReachable: true,
+    lastRunAt: lastSendTime,
+    totalSentThisSession,
+    lastError: lastSendError,
+    hint: "If signals are not sending, check that your cron-job.org job is active and the request body is set correctly.",
+  });
+});
+
+app.post("/api/autobroadcast/disable", (_req, res) => {
+  lastSendTime = null;
+  totalSentThisSession = 0;
+  lastSendError = null;
+  res.json({
+    success: true,
+    message: "Session stats cleared. To fully stop auto-broadcast, pause or delete your cron job in cron-job.org.",
+  });
+});
+
+async function handleCronBroadcast(req: any, res: any) {
+  const auth = checkCronAuth(req);
+  if (!auth.ok) {
+    lastSendError = (auth as any).error;
+    res.status(401).json({ success: false, error: (auth as any).error });
+    return;
+  }
+  const source =
+    req.body && typeof req.body === "object" && Object.keys(req.body).length > 0
+      ? req.body
+      : (req.query as any) || {};
+  const parsed = parseCronConfig(source);
+  if (!parsed.ok) {
+    lastSendError = parsed.error;
+    res.status(400).json({
+      success: false,
+      error: parsed.error,
+      hint: "POST JSON body {botToken, chatId, type:'alert'|'signal'} is required. Copy exact values from Settings → Show Setup Values.",
+    });
+    return;
+  }
+  const { cfg } = parsed;
+  const messageType: "alert" | "signal" = (source as any).type === "alert" ? "alert" : "signal";
+  try {
+    const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(cfg.botToken, cfg.chatId);
+    const text = messageType === "alert" ? buildAlertMessage(cfg) : buildServerSignal(cfg);
+    const data = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: cleanChatId, text, parse_mode: "HTML", disable_web_page_preview: true }),
+      }
+    );
+    if (!data.ok) {
+      lastSendError = data.description || "Send failed";
+      res.status(400).json({ success: false, error: data.description });
+      return;
+    }
+    lastSendTime = new Date().toISOString();
+    totalSentThisSession += 1;
+    lastSendError = null;
+    res.json({ success: true, type: messageType, messageId: data.result.message_id, totalSent: totalSentThisSession });
+  } catch (err: any) {
+    lastSendError = err.message;
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+app.post("/api/cron/auto-broadcast", handleCronBroadcast);
+app.get("/api/cron/auto-broadcast", handleCronBroadcast);
 
 // Configure Vite integration or static file serving
 const setupServer = async () => {
