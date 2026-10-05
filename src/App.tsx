@@ -241,6 +241,13 @@ export default function App() {
   const [broadcastError, setBroadcastError] = useState("");
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
   const [lastBroadcastId, setLastBroadcastId] = useState<string | null>(null);
+  // Real Telegram-verified destination of the last manual broadcast (from the
+  // server response — never assumed from local state).
+  const [lastBroadcastDest, setLastBroadcastDest] = useState<{
+    title: string;
+    chatId: string;
+    messageId: string;
+  } | null>(null);
 
   // Viewport custom save template/blueprint states
   const [showViewportSaveForm, setShowViewportSaveForm] = useState(false);
@@ -498,8 +505,8 @@ export default function App() {
         rationale: draftData.rationale,
         status: "ACTIVE",
         sentMessageId: data.messageId ? String(data.messageId) : null,
-        botTokenUsed: config.botToken,
-        chatIdUsed: config.chatId,
+        botTokenUsed: data.botToken || config.botToken,
+        chatIdUsed: data.chatId || config.chatId,
         chatTitle: data.chatTitle || config.chatTitle || "Telegram Channel",
         createdAt: new Date().toISOString(),
         updateHistory: [],
@@ -512,6 +519,11 @@ export default function App() {
       });
       setBroadcastSuccess(true);
       setLastBroadcastId(newSignal.id);
+      setLastBroadcastDest({
+        title: newSignal.chatTitle || "Telegram Channel",
+        chatId: newSignal.chatIdUsed || "",
+        messageId: newSignal.sentMessageId || "",
+      });
       setSelectedSignal(newSignal);
       setCurrentDraft(null); // Clear raw draft as it's sent & stored in signals history list!
     } catch (err: any) {
@@ -570,8 +582,8 @@ export default function App() {
         rationale: editableRationale,
         status: "ACTIVE",
         sentMessageId: data.messageId ? String(data.messageId) : null,
-        botTokenUsed: config.botToken,
-        chatIdUsed: config.chatId,
+        botTokenUsed: data.botToken || config.botToken,
+        chatIdUsed: data.chatId || config.chatId,
         chatTitle: data.chatTitle || config.chatTitle || "Telegram Channel",
         createdAt: new Date().toISOString(),
         updateHistory: [],
@@ -581,6 +593,11 @@ export default function App() {
       persistSignals(updatedSignals);
       setBroadcastSuccess(true);
       setLastBroadcastId(newSignal.id);
+      setLastBroadcastDest({
+        title: newSignal.chatTitle || "Telegram Channel",
+        chatId: newSignal.chatIdUsed || "",
+        messageId: newSignal.sentMessageId || "",
+      });
       
       // Auto-select is useful for subsequent quick edits!
       setSelectedSignal(newSignal);
@@ -665,8 +682,8 @@ export default function App() {
         rationale: editableRationale || "Algorithmic pattern matching.",
         status: "ACTIVE",
         sentMessageId: data.messageId ? String(data.messageId) : null,
-        botTokenUsed: config.botToken,
-        chatIdUsed: config.chatId,
+        botTokenUsed: data.botToken || config.botToken,
+        chatIdUsed: data.chatId || config.chatId,
         chatTitle: data.chatTitle || config.chatTitle || "Telegram Channel",
         createdAt: new Date().toISOString(),
         updateHistory: [],
@@ -1318,7 +1335,13 @@ export default function App() {
                                   {sig.chatTitle && (
                                     <>
                                       <span>&bull;</span>
-                                      <span className="text-slate-400 max-w-[120px] truncate" title={sig.chatTitle}>{sig.chatTitle}</span>
+                                      <span className="text-slate-400 max-w-[120px] truncate" title={`${sig.chatTitle} (${sig.chatIdUsed || "id unknown"})`}>{sig.chatTitle}</span>
+                                    </>
+                                  )}
+                                  {sig.chatIdUsed && (
+                                    <>
+                                      <span>&bull;</span>
+                                      <span className="text-slate-500 font-mono" title="Channel this signal was delivered to">{sig.chatIdUsed}</span>
                                     </>
                                   )}
                                   {sig.sentMessageId && (
@@ -1694,6 +1717,11 @@ export default function App() {
                     <div>
                       <div className="font-semibold">Signal Alert Transmitted!</div>
                       <p className="text-slate-400 text-[11px]">The setup is now completely live in your Telegram channel. Monitor and coordinate price targets anytime using the Registry.</p>
+                      {lastBroadcastDest && (
+                        <p className="text-slate-300 text-[11px] mt-1 font-mono">
+                          Delivered to <b className="text-emerald-300">{lastBroadcastDest.title}</b> ({lastBroadcastDest.chatId || "id unknown"}) · msg {lastBroadcastDest.messageId || "?"}
+                        </p>
+                      )}
                     </div>
                   </motion.div>
                 )}

@@ -75,7 +75,7 @@ function sanitizeTelegramCredentials(botToken: string, chatId: string) {
 export default function TelegramConfigPanel({ config, onChange }: Props) {
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
-  const [successInfo, setSuccessInfo] = useState<{ title: string; id: string } | null>(null);
+  const [successInfo, setSuccessInfo] = useState<{ title: string; id: string; verified: boolean } | null>(null);
   const [showToken, setShowToken] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
 
@@ -86,7 +86,8 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
     onChange({ ...config, botToken: "", chatId: "", isConnected: false, chatTitle: "" });
   };
 
-  // "Connect Bot" button: marks as connected without sending a test message
+  // "Connect Bot" button: saves the values locally WITHOUT contacting Telegram.
+  // It must never claim a message was delivered — only the test button proves that.
   const handleInstantConnect = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!config.botToken || !config.chatId) {
@@ -101,7 +102,7 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
       return;
     }
     setTestStatus("success");
-    setSuccessInfo({ title: "Linked Successfully", id: cleanChatId });
+    setSuccessInfo({ title: "Saved locally (not yet verified)", id: cleanChatId, verified: false });
     onChange({ ...config, botToken: cleanToken, chatId: cleanChatId, isConnected: true, chatTitle: config.chatTitle || "Linked Channel" });
   };
 
@@ -153,7 +154,8 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
       }
 
       setTestStatus("success");
-      setSuccessInfo({ title: data.chatTitle, id: updatedChatId });
+      // verified:true — a real message landed in this channel via your token.
+      setSuccessInfo({ title: data.chatTitle, id: updatedChatId, verified: true });
       onChange({ ...config, botToken: updatedBotToken, chatId: updatedChatId, isConnected: true, chatTitle: data.chatTitle });
     } catch (err: any) {
       setTestStatus("error");
@@ -400,11 +402,17 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
             >
               <div className="flex items-center gap-1.5 font-semibold">
                 <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Connection Successful!</span>
+                <span>{successInfo.verified ? "Connection Successful!" : "Saved — verification still needed"}</span>
               </div>
-              <p className="text-slate-300">
-                A verification message was sent to <b>{successInfo.title}</b>. Your signals are ready to broadcast.
-              </p>
+              {successInfo.verified ? (
+                <p className="text-slate-300">
+                  Telegram confirmed delivery to <b>{successInfo.title}</b> (<code className="font-mono">{successInfo.id}</code>). Your signals will broadcast to this exact channel.
+                </p>
+              ) : (
+                <p className="text-slate-300">
+                  Values stored for <code className="font-mono">{successInfo.id}</code>, but <b>no message has been sent yet</b>. Click <b>Send Test Message</b> now — only a real delivered message proves the channel is truly connected.
+                </p>
+              )}
             </motion.div>
           )}
 
