@@ -10,6 +10,24 @@ dotenv.config();
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.text({ type: ["text/plain", "application/*+json"] }));
+
+// Normalize: cron-job.org may deliver the JSON payload as a raw string when
+// Content-Type wasn't set to application/json. Parse it back into an object.
+function normalizedBody(req: any): any {
+  const b = req.body;
+  if (b && typeof b === "object" && Object.keys(b).length > 0) return b;
+  if (typeof b === "string" && b.trim()) {
+    try {
+      const p = JSON.parse(b.trim());
+      if (p && typeof p === "object") return p;
+    } catch {
+      // not JSON — fall through to query fallback
+    }
+  }
+  return req.query || {};
+}
 
 const PORT = 3000;
 
@@ -787,18 +805,65 @@ let lastSendTime: string | null = null;
 let totalSentThisSession = 0;
 let lastSendError: string | null = null;
 
-app.post("/api/autobroadcast/configure", (req, res) => {
-  const parsed = parseCronConfig(req.body);
+app.post("/api/autobroadcast/configure", async (req, res) => {
+  const body = normalizedBody(req);
+  const parsed = parseCronConfig(body);
   if (!parsed.ok) {
     res.status(400).json({ error: parsed.error });
     return;
   }
   const { cfg } = parsed;
-  const intervalMinutes = typeof req.body.intervalMinutes === "number" && req.body.intervalMinutes > 0
-    ? req.body.intervalMinutes
+  const intervalMinutes = typeof body.intervalMinutes === "number" && body.intervalMinutes > 0
+    ? body.intervalMinutes
     : 2;
-  const host = req.headers.host || "your-app.vercel.app";
-  const protocol = (host as string).includes("localhost") ? "http" : "https";
+
+  // Validate the credentials NOW (via Telegram) so the user never copies a
+  // payload containing a bad token/chat ID into cron-job.org.
+  const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(cfg.botToken, cfg.chatId);
+  try {
+    const me = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getMe`,
+      { method: "GET" }
+    );
+    if (!me.ok) {
+      res.status(400).json({
+        error: `Bot token is invalid: ${me.description || "Unauthorized"}. Copy a fresh token from @BotFather and reconnect first.`,
+      });
+      return;
+    }
+    const chat = await safeTelegramFetch(
+      `https://api.telegram.org/bot${cleanToken}/getChat`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: cleanChatId }),
+      }
+    );
+    if (!chat.ok) {
+      res.status(400).json({
+        error: buildTelegramErrorAdvice(chat, cleanChatId),
+        chatIdUsed: cleanChatId,
+      });
+      return;
+    }
+    cfg.chatTitle = chat.result?.title || chat.result?.username || cfg.chatTitle;
+  } catch (err: any) {
+    res.status(500).json({ error: `Could not reach Telegram to validate: ${err.message}` });
+    return;
+  }
+
+  const forwardedHost =
+    ((req.headers["x-forwarded-host"] as string) || "").split(",")[0].trim();
+  const vercelProd =
+    (process.env.APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || "").trim();
+  let host =
+    (vercelProd
+      ? vercelProd.replace(/^https?:\/\//, "").replace(/\/$/, "")
+      : forwardedHost || (req.headers.host as string) || "your-app.vercel.app");
+  host = host.replace(/\/$/, "");
+  const isLocal =
+    host.includes("localhost") || host.startsWith("127.") || host.startsWith("192.168.");
+  const protocol = isLocal ? "http" : "https";
   const cronUrl = `${protocol}://${host}/api/cron/auto-broadcast`;
   const base = {
     botToken: cfg.botToken,
@@ -818,6 +883,12 @@ app.post("/api/autobroadcast/configure", (req, res) => {
     signalPayload: JSON.stringify({ ...base, type: "signal" }),
     cronPayload: JSON.stringify({ ...base, type: "signal" }),
     intervalMinutes,
+    embeddedChatId: cfg.chatId,
+    embeddedChatTitle: cfg.chatTitle || "",
+    tokenPrefix: cfg.botToken.slice(0, 6) + "...",
+    hostWarning: isLocal
+      ? "You enabled from localhost — cron-job.org cannot reach localhost. Redeploy, open the LIVE app URL, and click Enable there so the cron URL is public."
+      : null,
   });
 });
 
@@ -861,17 +932,15 @@ async function handleCronBroadcast(req: any, res: any) {
     res.status(401).json({ success: false, error: (auth as any).error });
     return;
   }
-  const source =
-    req.body && typeof req.body === "object" && Object.keys(req.body).length > 0
-      ? req.body
-      : (req.query as any) || {};
+  // normalizedBody() also recovers JSON sent as text/plain (wrong Content-Type in cron-job.org).
+  const source = normalizedBody(req);
   const parsed = parseCronConfig(source);
   if (!parsed.ok) {
     lastSendError = parsed.error;
     res.status(400).json({
       success: false,
       error: parsed.error,
-      hint: "POST JSON body {botToken, chatId, type:'alert'|'signal'} is required. Copy exact values from Settings → Show Setup Values.",
+      hint: "POST JSON body {botToken, chatId, type:'alert'|'signal'} is required. Copy exact values from Settings → Show Setup Values. Also check the job's Content-Type header is application/json.",
     });
     return;
   }
@@ -880,7 +949,7 @@ async function handleCronBroadcast(req: any, res: any) {
   try {
     const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(cfg.botToken, cfg.chatId);
     const text = messageType === "alert" ? buildAlertMessage(cfg) : buildServerSignal(cfg);
-    const data = await safeTelegramFetch(
+    let data = await safeTelegramFetch(
       `https://api.telegram.org/bot${cleanToken}/sendMessage`,
       {
         method: "POST",
@@ -888,9 +957,30 @@ async function handleCronBroadcast(req: any, res: any) {
         body: JSON.stringify({ chat_id: cleanChatId, text, parse_mode: "HTML", disable_web_page_preview: true }),
       }
     );
+    // Retry as plain text if Telegram rejects the HTML markup.
+    if (!data.ok && (data.description || "").toLowerCase().includes("parse")) {
+      const plain = text
+        .replace(/<[^>]*>/g, "")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&");
+      data = await safeTelegramFetch(
+        `https://api.telegram.org/bot${cleanToken}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: cleanChatId, text: plain, disable_web_page_preview: true }),
+        }
+      );
+    }
     if (!data.ok) {
       lastSendError = data.description || "Send failed";
-      res.status(400).json({ success: false, error: data.description });
+      res.status(400).json({
+        success: false,
+        error: data.description,
+        advice: buildTelegramErrorAdvice(data, cleanChatId),
+        chatIdUsed: cleanChatId,
+      });
       return;
     }
     lastSendTime = new Date().toISOString();

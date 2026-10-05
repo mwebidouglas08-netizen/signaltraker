@@ -36,6 +36,31 @@ interface CronSetup {
   alertPayload: string;
   signalPayload: string;
   intervalMinutes: number;
+  embeddedChatId?: string;
+  embeddedChatTitle?: string;
+  tokenPrefix?: string;
+  hostWarning?: string | null;
+}
+
+// Parse a stored payload to prove what cron-job.org will actually send.
+// Returns the embedded botToken/chatId (or nulls if the JSON is corrupt).
+function inspectPayload(payload: string): { botToken: string; chatId: string; msgType: string } {
+  try {
+    const p = JSON.parse(payload);
+    return {
+      botToken: typeof p.botToken === "string" ? p.botToken : "",
+      chatId: typeof p.chatId === "string" ? p.chatId : String(p.chatId ?? ""),
+      msgType: typeof p.type === "string" ? p.type : "?",
+    };
+  } catch {
+    return { botToken: "", chatId: "", msgType: "?" };
+  }
+}
+
+function maskTokenFull(token: string): string {
+  if (!token) return "(missing!)";
+  if (token.length <= 12) return "*****" + token.slice(-4);
+  return token.slice(0, 6) + "..." + token.slice(-4) + ` (${token.length} chars)`;
 }
 
 function getSiteConfigLocal() {
@@ -91,6 +116,8 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
   const [serverError, setServerError] = useState("");
   const [cronSetup, setCronSetup] = useState<CronSetup | null>(null);
   const [intervalMinutes, setIntervalMinutes] = useState(2);
+  const [cronTestLoading, setCronTestLoading] = useState(false);
+  const [cronTestResult, setCronTestResult] = useState<string | null>(null);
   const [isEnabled, setIsEnabled] = useState(() => {
     return localStorage.getItem("server_broadcast_enabled") === "true";
   });
@@ -150,7 +177,14 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
         alertPayload: data.alertPayload,
         signalPayload: data.signalPayload,
         intervalMinutes: data.intervalMinutes,
+        embeddedChatId: data.embeddedChatId,
+        embeddedChatTitle: data.embeddedChatTitle,
+        tokenPrefix: data.tokenPrefix,
+        hostWarning: data.hostWarning || null,
       });
+      if (data.hostWarning) {
+        setServerError(data.hostWarning);
+      }
 
       setIsEnabled(true);
       localStorage.setItem("server_broadcast_enabled", "true");
@@ -172,14 +206,46 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
       await fetch("/api/autobroadcast/disable", { method: "POST" });
       setIsEnabled(false);
       setCronSetup(null);
+      setCronTestResult(null);
       localStorage.removeItem("server_broadcast_enabled");
       localStorage.removeItem("server_broadcast_cron_url");
+      localStorage.removeItem("server_broadcast_alert_payload");
+      localStorage.removeItem("server_broadcast_signal_payload");
       localStorage.removeItem("server_broadcast_cron_payload");
       await fetchStatus();
     } catch (err: any) {
       setServerError(err.message || "Disable failed.");
     } finally {
       setServerLoading(false);
+    }
+  };
+
+  // ── Test the EXACT saved payload against the cron endpoint ─────────────────
+  // This performs the same POST cron-job.org will perform, so a success here
+  // proves the copied URL + body are correct before touching cron-job.org.
+  const handleCronTest = async (which: "alert" | "signal") => {
+    if (!cronSetup) return;
+    setCronTestLoading(true);
+    setCronTestResult(null);
+    setServerError("");
+    try {
+      const payload = which === "alert" ? cronSetup.alertPayload : cronSetup.signalPayload;
+      const res = await fetch(cronSetup.cronUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      });
+      const ct = res.headers.get("content-type") || "";
+      const data = ct.includes("application/json") ? await res.json() : { error: await res.text() };
+      if (!res.ok || (data as any).success === false) {
+        throw new Error((data as any).error || (data as any).hint || `Test failed (HTTP ${res.status}).`);
+      }
+      setCronTestResult(`✅ ${which} test delivered to Telegram (messageId ${(data as any).messageId}). Your copied values are correct — now paste them into cron-job.org.`);
+      fetchStatus();
+    } catch (err: any) {
+      setCronTestResult(`❌ ${which} test failed: ${err.message || "unknown error"}`);
+    } finally {
+      setCronTestLoading(false);
     }
   };
 
@@ -291,7 +357,17 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
         )}
 
         {/* ── cron-job.org setup panel ── */}
-        {isEnabled && cronSetup && (
+        {isEnabled && cronSetup && (() => {
+          const sig = inspectPayload(cronSetup.signalPayload);
+          const al = inspectPayload(cronSetup.alertPayload);
+          const payloadChat = sig.chatId || al.chatId;
+          const payloadToken = sig.botToken || al.botToken;
+          const tokenMatches =
+            !!payloadToken && !!config.botToken && payloadToken.trim() === config.botToken.trim();
+          const chatMatches =
+            !!payloadChat && !!config.chatId && payloadChat.trim() === config.chatId.trim();
+          const isStale = !tokenMatches || !chatMatches;
+          return (
           <div className="bg-slate-900/60 border border-emerald-900/30 rounded-xl p-4 space-y-4">
             <div className="flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
@@ -305,37 +381,89 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
               </p>
             </div>
 
+            {/* ── What cron-job.org will actually send (proves the copy is right) ── */}
+            <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-3 space-y-1.5">
+              <p className="text-[10.5px] font-bold text-slate-200">🔍 Embedded in your copied bodies (auto-checked):</p>
+              <p className="text-[10px] text-slate-400 font-mono break-all">
+                Chat ID in body: <b className="text-emerald-300">{payloadChat || "(missing!)"}</b>
+                {" · "}Now in app: <b className="text-sky-300">{config.chatId || "(empty)"}</b>
+                {" "}{chatMatches ? "✅ match" : "⚠️ DIFFERENT — re-enable below"}
+              </p>
+              <p className="text-[10px] text-slate-400 font-mono break-all">
+                Token in body: <b className="text-emerald-300">{maskTokenFull(payloadToken)}</b>
+                {" "}{tokenMatches ? "✅ match" : "⚠️ DIFFERENT — re-enable below"}
+              </p>
+              {cronSetup.embeddedChatTitle && (
+                <p className="text-[10px] text-slate-400">
+                  Verified channel at enable time: <b className="text-slate-200">{cronSetup.embeddedChatTitle}</b>
+                </p>
+              )}
+              {isStale && (
+                <p className="text-[10.5px] text-amber-300 bg-amber-950/30 border border-amber-900/40 rounded-lg p-2">
+                  ⚠️ You changed your Bot Token or Channel ID <b>after</b> clicking Enable, so the bodies below are stale.
+                  Click <b>Stop Auto-Broadcast</b>, then <b>Enable</b> again to regenerate them — otherwise cron-job.org keeps sending to the old values.
+                </p>
+              )}
+            </div>
+
             <div className="space-y-1.5">
-              <p className="text-[10.5px] font-bold text-slate-300">Both cron jobs — same URL:</p>
+              <p className="text-[10.5px] font-bold text-slate-300">Both cron jobs — same URL (exact copy):</p>
               <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2">
                 <code className="text-emerald-300 text-[10px] break-all flex-1">{cronSetup.cronUrl}</code>
                 <CopyButton text={cronSetup.cronUrl} />
               </div>
+              {cronSetup.cronUrl.includes("localhost") && (
+                <p className="text-[10.5px] text-rose-300 bg-rose-950/30 border border-rose-900/40 rounded-lg p-2">
+                  ❌ This URL is localhost — cron-job.org can never reach it. Deploy to Vercel, open the LIVE URL, and Enable there.
+                </p>
+              )}
             </div>
 
             <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 space-y-2">
               <p className="text-[11px] font-bold text-amber-300">🔔 Cron Job 1 — Alert (fires first)</p>
-              <p className="text-[10px] text-slate-400">Schedule: your interval (e.g. every 5 min) · Method: POST · Content-Type: application/json</p>
+              <p className="text-[10px] text-slate-400">Schedule: your interval (e.g. every 2 min) · Method: POST · Request body: Custom · Content-Type: application/json · Body = below EXACTLY (must contain "type":"alert")</p>
               <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
                 <code className="text-amber-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.alertPayload}</code>
                 <CopyButton text={cronSetup.alertPayload} />
               </div>
+              <button
+                type="button"
+                onClick={() => handleCronTest("alert")}
+                disabled={cronTestLoading}
+                className="px-3 py-1.5 text-[10px] font-bold bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
+              >
+                {cronTestLoading ? "Testing..." : "▶ Test-send this exact alert now"}
+              </button>
             </div>
 
             <div className="bg-emerald-950/20 border border-emerald-900/30 rounded-xl p-3 space-y-2">
               <p className="text-[11px] font-bold text-emerald-300">📈 Cron Job 2 — Signal (fires 1 min after alert)</p>
-              <p className="text-[10px] text-slate-400">Schedule: same interval, <b className="text-white">started/saved 1 minute after Cron Job 1</b> · Method: POST · Content-Type: application/json</p>
+              <p className="text-[10px] text-slate-400">Schedule: same interval, <b className="text-white">started/saved 1 minute after Cron Job 1</b> · Method: POST · Request body: Custom · Content-Type: application/json · Body = below EXACTLY (must contain "type":"signal")</p>
               <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
                 <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.signalPayload}</code>
                 <CopyButton text={cronSetup.signalPayload} />
               </div>
+              <button
+                type="button"
+                onClick={() => handleCronTest("signal")}
+                disabled={cronTestLoading}
+                className="px-3 py-1.5 text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
+              >
+                {cronTestLoading ? "Testing..." : "▶ Test-send this exact signal now"}
+              </button>
             </div>
+
+            {cronTestResult && (
+              <p className="text-[10.5px] bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200">{cronTestResult}</p>
+            )}
 
             <p className="text-[10px] text-slate-500">
               <b className="text-slate-300">Tip:</b> Create and save Cron Job 1 first. Wait exactly 1 minute, then create and save Cron Job 2. They will naturally be offset by 1 minute forever.
+              If a test-send fails, fix what it says (usually bot-not-admin or wrong ID) and click Enable again for fresh bodies.
             </p>
           </div>
-        )}
+          );
+        })()}
 
         {/* Action buttons */}
         <div className="flex justify-end pt-1">

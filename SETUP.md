@@ -75,8 +75,15 @@ Common Telegram errors:
    - Request method: **POST**
    - Headers: `Content-Type: application/json`
      (+ `Authorization: Bearer <CRON_SECRET>` if you set one in Vercel)
-   - Body: paste the **alertPayload** exactly
+   - Body: paste the **alertPayload** exactly (use the Copy button — hand-typing
+     risks truncating the bot token)
    - Save. Note the time you saved it.
+
+   **Before creating the jobs**, in the app click
+   **▶ Test-send this exact signal now**. ✅ = your copied URL + body are
+   proven correct end-to-end (same POST cron-job.org will send). ❌ = fix the
+   shown error, then Stop + Enable again for fresh bodies — never paste
+   failing values into cron-job.org.
 
    **Cron Job 2 — Signal (fires 1 min after alert)**
    - Same as above, but Body = **signalPayload**.
@@ -110,11 +117,19 @@ running both at the same interval doubles the messages.
 **cron-job.org shows failed executions:**
 Open its execution log and read the JSON body:
 - `botToken is required` / `chatId is required` → the job's Body is empty or
-  not valid JSON. Re-paste the exact payload from Settings.
+  not valid JSON. Causes: (1) Body field left blank, (2) Request method left
+  on GET, (3) Content-Type header missing so the body arrived as plain text —
+  the server now recovers case (3) automatically, but set
+  `Content-Type: application/json` anyway. Re-paste via the Copy button.
+- `Bot token is invalid` (at Enable time) → fresh token from @BotFather first.
 - `Unauthorized cron trigger` → add the `Authorization: Bearer ...` header
   with the same `CRON_SECRET` value as in Vercel, or remove `CRON_SECRET`
   from Vercel if you don't want auth.
-- Telegram `chat not found / forbidden` → see Step 2 errors above.
+- Telegram `chat not found / forbidden` → see Step 2 errors above. The app's
+  setup panel now shows the exact Chat ID + masked token embedded in each
+  body with ✅/⚠️ match indicators — if ⚠️, Stop + Enable again.
+- `localhost` in the cron URL → you Enabled from `npm run dev`. cron-job.org
+  cannot reach your laptop. Enable from the LIVE Vercel URL instead.
 
 **Signals send while the app is open but not via cron:**
 The in-browser scanner only runs while the tab is open. After logout only
