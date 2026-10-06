@@ -93,7 +93,7 @@ jobs:
             --arg ci "${{ secrets.CHAT_ID }}" \
             --argjson iv "$INTERVAL" \
             --argjson chain "{ $CHAIN \"x\": 1 }" \
-            '{botToken:$bt, chatId:$ci, mode:"cycle", intervalMinutes:$iv, siteName:"kicktrade", promoUrl:"http://kicktrade.site", botName:"mrzetuzetu sv 1 bot", botSignature:"kicktrade Over/Under Bot", hashtags:"#TradingSignal #kicktrade #Signals", activeContracts:["UNDER 7","UNDER 8","OVER 2","OVER 3"]} + ($chain | del(.x))')
+            '{botToken:$bt, chatId:$ci, mode:"cycle", intervalMinutes:$iv, siteName:"kicktrade", promoUrl:"http://kicktrade.site", botName:"mrzetuzetu sv1 bot", botSignature:"kicktrade Over/Under Bot", hashtags:"#TradingSignal #kicktrade #Signals", activeContracts:["UNDER 7","UNDER 8","OVER 2","OVER 3"]} + ($chain | del(.x))')
 
           echo "Pinging ${{ secrets.APP_URL }}/api/cron/auto-broadcast (mode=cycle, interval=${INTERVAL}m) ..."
 

@@ -108,15 +108,15 @@ export default function TradingSignalForm({
     try {
       const cfg = JSON.parse(localStorage.getItem("signal_site_config") || "{}");
       const cur = String(cfg?.botName || "").trim();
-      if (!cur || ["use deriv bot", "use kicktrade bot", "use snipper killer bot"].includes(cur.toLowerCase())) {
-        cfg.botName = "mrzetuzetu sv 1 bot";
+      if (!cur || ["use deriv bot", "use kicktrade bot", "use snipper killer bot", "mrzetuzetu sv 1 bot"].includes(cur.toLowerCase())) {
+        cfg.botName = "mrzetuzetu sv1 bot";
         try { localStorage.setItem("signal_site_config", JSON.stringify(cfg)); } catch {}
       }
       return cfg;
     } catch { return {}; }
   })();
 
-  const [derivBotName, setDerivBotName] = useState<string>(savedSite.botName || "mrzetuzetu sv 1 bot");
+  const [derivBotName, setDerivBotName] = useState<string>(savedSite.botName || "mrzetuzetu sv1 bot");
   const [derivEntryDigit, setDerivEntryDigit] = useState("9");
   const [derivConfidence, setDerivConfidence] = useState("85%");
   const [derivPromoUrl, setDerivPromoUrl] = useState<string>(savedSite.promoUrl || "http://kicktrade.site");
@@ -1239,7 +1239,7 @@ export default function TradingSignalForm({
                   type="text"
                   value={derivBotName}
                   onChange={(e) => { setDerivBotName(e.target.value); persistSiteConfig({ botName: e.target.value }); }}
-                  placeholder="e.g. mrzetuzetu sv 1 bot"
+                  placeholder="e.g. mrzetuzetu sv1 bot"
                   className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-slate-100 placeholder-slate-650 outline-none font-semibold text-yellow-300"
                   id="deriv-bot-name-input"
                 />

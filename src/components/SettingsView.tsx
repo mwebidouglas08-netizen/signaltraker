@@ -108,8 +108,8 @@ function buildGetUrl(cronUrl: string, payload: string): string | null {
   }
 }
 
-const CANONICAL_BOT_NAME = "mrzetuzetu sv 1 bot";
-const LEGACY_BOT_NAMES = ["use deriv bot", "use kicktrade bot", "use snipper killer bot"];
+const CANONICAL_BOT_NAME = "mrzetuzetu sv1 bot";
+const LEGACY_BOT_NAMES = ["use deriv bot", "use kicktrade bot", "use snipper killer bot", "mrzetuzetu sv 1 bot"];
 function migrateSiteBotName(cfg: any): any {
   const cur = String(cfg?.botName || "").trim();
   if (!cur || LEGACY_BOT_NAMES.includes(cur.toLowerCase())) {

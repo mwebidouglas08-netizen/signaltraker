@@ -49,8 +49,8 @@ interface Props {
 // One-time migration: legacy default bot names become the channel's canonical
 // bot ("mrzetuzetu sv 1 bot") and are re-persisted, so old setups render the
 // new name everywhere without manual edits. Custom names are never touched.
-const CANONICAL_BOT_NAME = "mrzetuzetu sv 1 bot";
-const LEGACY_BOT_NAMES = ["use deriv bot", "use kicktrade bot", "use snipper killer bot"];
+const CANONICAL_BOT_NAME = "mrzetuzetu sv1 bot";
+const LEGACY_BOT_NAMES = ["use deriv bot", "use kicktrade bot", "use snipper killer bot", "mrzetuzetu sv 1 bot"];
 function migrateSiteBotName(cfg: any): any {
   const cur = String(cfg?.botName || "").trim();
   if (!cur || LEGACY_BOT_NAMES.includes(cur.toLowerCase())) {

@@ -458,7 +458,7 @@ app.post("/api/gemini/generate-signal", async (req, res) => {
     isDerivStyle = false,
     strategyName = "Second Least Digit",
     ticksCount = "1ticks",
-    botName = "mrzetuzetu sv 1 bot",
+    botName = "mrzetuzetu sv1 bot",
     entryDigit = "9",
     confidence = "85%",
     promoUrl = "http://kicktrade.site",
@@ -699,6 +699,17 @@ function normalizeContracts(v: any): string[] {
   return fallback;
 }
 
+// Channel bot display name: the canonical name wins over any legacy default
+// still embedded in older pasted bodies. Genuinely custom names pass through
+// untouched — only the known legacy defaults are rewritten.
+const CANONICAL_BOT_NAME = "mrzetuzetu sv1 bot";
+const LEGACY_BOT_NAMES = ["use deriv bot", "use kicktrade bot", "use snipper killer bot", "mrzetuzetu sv 1 bot"];
+function canonicalizeBotName(v: any): string {
+  const s = String(v ?? "").trim();
+  if (!s) return CANONICAL_BOT_NAME;
+  return LEGACY_BOT_NAMES.includes(s.toLowerCase()) ? CANONICAL_BOT_NAME : s;
+}
+
 function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false; error: string } {
   const rawToken = (body || {}).botToken;
   const rawChat = (body || {}).chatId;
@@ -718,7 +729,7 @@ function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false
       chatTitle: body.chatTitle || "",
       siteName: body.siteName || "kicktrade",
       promoUrl: body.promoUrl || "http://kicktrade.site",
-      botName: body.botName || "mrzetuzetu sv 1 bot",
+      botName: canonicalizeBotName(body.botName),
       botSignature: body.botSignature || "kicktrade Over/Under Bot",
       hashtags: body.hashtags || "#TradingSignal #kicktrade #Signals",
       activeContracts: normalizeContracts(body.activeContracts),
