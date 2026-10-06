@@ -1245,6 +1245,15 @@ async function handleCronBroadcast(req: any, res: any) {
       const elapsed = nowMs - blockStart;
       const nextSignalAt = blockStart + blockMs;
       const nextAlertAt = blockStart + blockMs - 60000;
+      // Clock proof on every response: lets anyone verify exactly which
+      // window a ping landed in (diagnoses sparse-schedule aliasing, where a
+      // job running less often than every minute locks into one phase).
+      const clockProof = {
+        serverTimeUtc: new Date(nowMs).toISOString(),
+        blockStartUtc: new Date(blockStart).toISOString(),
+        elapsedSec: Math.floor(elapsed / 1000),
+        intervalMinutes: N,
+      };
 
       if (elapsed < 60000) {
         const r = await sendOne("signal", deletePrior, wantExpiryNotice);
@@ -1258,6 +1267,7 @@ async function handleCronBroadcast(req: any, res: any) {
           chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
           nextEvent: "alert", nextEventAt: new Date(nextAlertAt).toISOString(),
           nextEventClock: formatEatClock(nextAlertAt),
+          ...clockProof,
         });
         return;
       }
@@ -1273,6 +1283,7 @@ async function handleCronBroadcast(req: any, res: any) {
           chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
           nextEvent: "signal", nextEventAt: new Date(nextSignalAt).toISOString(),
           nextEventClock: formatEatClock(nextSignalAt),
+          ...clockProof,
         });
         return;
       }
@@ -1281,6 +1292,7 @@ async function handleCronBroadcast(req: any, res: any) {
         nextEvent: "alert", nextEventAt: new Date(nextAlertAt).toISOString(),
         nextEventClock: formatEatClock(nextAlertAt),
         chatIdUsed: cleanChatId,
+        ...clockProof,
         hint: "Nothing is due this minute — normal for most minutes of the cycle. " +
           "If you ONLY ever see waiting/signal phases and never an alert, your cron job is almost certainly NOT running every 1 minute " +
           "(e.g. every 15 minutes lands all pings in signal phases, so alerts never fire). Set the cron schedule to every 1 minute.",

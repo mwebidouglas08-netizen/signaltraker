@@ -708,6 +708,13 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
               <p>✅ <b className="text-emerald-300">Open app</b> — the History sweep expires + deletes anything delivered, every 30s.</p>
               <p>⚠️ <b className="text-amber-300">Plain cron-job.org bodies alone</b> deliver accurate alerts + signals but cannot name the previous message to delete (static text) — old channel messages stay until one of the three paths above runs.</p>
             </div>
+
+            <div className="bg-slate-950/70 border border-sky-900/40 rounded-lg p-2.5 text-[10px] text-slate-400 space-y-1">
+              <p><b className="text-slate-200">🔎 Alert missing? Read your cron-job.org history's <code className="font-mono">phase</code> values:</b></p>
+              <p>• All runs <code className="font-mono">phase:"signal"</code>, never alert → job runs on a sparse grid (e.g. every 15 min), not every 1 minute. Fix the schedule.</p>
+              <p>• All runs <code className="font-mono">phase:"alert"</code>, never signal → same cause, grid locked to alert windows — or the job body is the <b>alert</b> body instead of the cycle body. Re-copy the <b>cycle</b> body and set every 1 minute.</p>
+              <p>• Mostly <code className="font-mono">phase:"waiting"</code> with occasional alert/signal → healthy. Each response also carries <code className="font-mono">serverTimeUtc</code>/<code className="font-mono">elapsedSec</code> proving the window.</p>
+            </div>
           </div>
           );
         })()}

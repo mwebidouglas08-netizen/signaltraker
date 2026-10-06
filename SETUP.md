@@ -182,6 +182,15 @@ This has exactly two causes, no others:
    signals-only there). The app refuses to Enable in that state — if Enable
    shows the STALE warning, wait for the newest deployment and retry.
 
+**Only alerts arrive, signals never do:**
+Mirror image of the above: the pings land only in alert windows (e.g. an
+every-2-minutes schedule on an odd-minute grid with a 2-minute interval),
+or the job body is the **alert** body instead of the **cycle** body
+(`"mode":"cycle"`). Re-copy the cycle body, set the schedule to every
+1 minute, and compare `phase` values across runs — a healthy job shows
+`waiting` most minutes with `alert` then `signal` once per cycle. Every
+response carries `serverTimeUtc`/`elapsedSec` proving the exact window.
+
 **Signals send while the app is open but not via cron:**
 The in-browser scanner only runs while the tab is open. After logout only
 cron-job.org (or GitHub Actions) can trigger sends — confirm at least one
