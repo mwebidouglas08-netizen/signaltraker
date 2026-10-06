@@ -101,6 +101,32 @@ expiry notice + auto-delete on the following cycle. 24/7, logged out or not.
 > but re-do this step to move to the single-job cycle — order is then
 > mathematically guaranteed instead of depending on save-time offsets.
 
+## Alternative — two separate jobs (separate alert/signal logs)
+
+If you want one execution log for alerts and one for signals, create **two**
+jobs with the exact bodies from the app's *Classic: two separate jobs* panel
+(each sends immediately on every run, so each has its own log). For the alert
+to truly precede the signal you must give them **custom cron expressions**
+the app computes for your interval (e.g. at 15 min: alerts
+`14,29,44,59 * * * *`, signals `0,15,30,45 * * * *`).
+Two jobs on the **same** "every N minutes" preset fire simultaneously and the
+order is random — that setup can never guarantee alert-first. This needs an
+interval in whole minutes that divides 60 (2, 5, 15, 30); otherwise use the
+single every-minute job above.
+
+## Expiry + auto-delete: what runs where (read this once)
+
+- **Signals/alerts delivered**: by cron-job.org (either setup) or the GitHub
+  workflow — accurate, with real Nairobi times. ✅
+- **Expiry notice + channel delete, fully unattended**: ONLY the **GitHub
+  Actions workflow** (it remembers message IDs between runs) and the app's
+  **test buttons** (each test expires the previous test's signal). Plain
+  cron-job.org bodies are static text and cannot name the previous message,
+  so on their own they never delete — old messages wait until one of the
+  above paths, or the open app's 30-second History sweep, handles them.
+- **Open app**: the History sweep posts expiry notices and deletes expired
+  deliveries from channel + app automatically.
+
 ---
 
 ## Optional — GitHub Actions full-auto scheduler (with expiry cleanup)

@@ -73,6 +73,21 @@ function maskTokenFull(token: string): string {
   return token.slice(0, 6) + "..." + token.slice(-4) + ` (${token.length} chars)`;
 }
 
+// Build exact per-minute cron schedules for the classic two-job setup so the
+// alert ALWAYS precedes its signal: signals fire at block starts (0, N, 2N…),
+// alerts 1 minute earlier ((m - 1) mod 60). Only possible when N divides the
+// hour evenly and the cron service accepts custom expressions — otherwise the
+// single every-minute cycle job is the correct choice.
+function buildMinuteLists(n: number): { signal: number[]; alert: number[] } | null {
+  if (!Number.isInteger(n) || n < 2 || n > 60 || 60 % n !== 0) return null;
+  const signal: number[] = [];
+  for (let m = 0; m < 60; m += n) signal.push(m);
+  const alert = signal.map((m) => (m + 60 - 1) % 60).sort((a, b) => a - b);
+  return { signal, alert };
+}
+function cronExpr(mins: number[]): string {
+  return `${mins.join(",")} * * * *`;
+}
 // Build the GET-mode cron URL for one payload: same data as the POST body,
 // URL-encoded into the query string (handles # in hashtags, spaces in names).
 // Lets a cron job work with Method: GET and no body at all.
@@ -496,6 +511,8 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
             !!payloadChat && !!config.chatId && payloadChat.trim() === config.chatId.trim();
           const isStale = !tokenMatches || !chatMatches;
           const cycleGetUrl = cronSetup.cyclePayload ? buildGetUrl(cronSetup.cronUrl, cronSetup.cyclePayload) : null;
+          // Classic two-job schedules with mathematically guaranteed order.
+          const minuteLists = buildMinuteLists(cronSetup.intervalMinutes);
           return (
           <div className="bg-slate-900/60 border border-emerald-900/30 rounded-xl p-4 space-y-4">
             <div className="flex items-center gap-1.5">
@@ -616,6 +633,65 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
               </div>
             </div>
 
+            {/* ── Classic: two separate jobs (separate logs) ── */}
+            <div className="bg-slate-950/70 border border-slate-700 rounded-xl p-3 space-y-3">
+              <p className="text-[11px] font-bold text-slate-200">📋 Alternative: two separate jobs (alert log + signal log)</p>
+              <p className="text-[10px] text-slate-400">
+                Each job sends immediately on every run, so each has its own execution log.
+                For the alert to truly precede the signal you must use the custom schedules below —
+                two jobs on the <b className="text-slate-200">same</b> "every {cronSetup.intervalMinutes} minutes" grid fire simultaneously and the order is random.
+              </p>
+              {minuteLists ? (
+                <>
+                  <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 space-y-2">
+                    <p className="text-[11px] font-bold text-amber-300">🔔 Job A — Alert (custom schedule)</p>
+                    <p className="text-[10px] text-slate-400">Schedule (custom cron expression): <code className="font-mono text-white">{cronExpr(minuteLists.alert)}</code> · Method: POST · Content-Type: application/json · Body = below EXACTLY</p>
+                    <div className="flex items-center gap-2">
+                      <code className="text-[10px] font-mono text-slate-300 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 flex-1 break-all">Minutes: {minuteLists.alert.join(", ")}</code>
+                      <CopyButton text={cronExpr(minuteLists.alert)} />
+                    </div>
+                    <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
+                      <code className="text-amber-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.alertPayload}</code>
+                      <CopyButton text={cronSetup.alertPayload} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCronTest("alert")}
+                      disabled={cronTestLoading}
+                      className="px-3 py-1.5 text-[10px] font-bold bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
+                    >
+                      {cronTestLoading ? "Testing..." : "▶ Test-send this exact alert now"}
+                    </button>
+                  </div>
+                  <div className="bg-emerald-950/20 border border-emerald-900/30 rounded-xl p-3 space-y-2">
+                    <p className="text-[11px] font-bold text-emerald-300">📈 Job B — Signal (custom schedule)</p>
+                    <p className="text-[10px] text-slate-400">Schedule (custom cron expression): <code className="font-mono text-white">{cronExpr(minuteLists.signal)}</code> · Method: POST · Content-Type: application/json · Body = below EXACTLY</p>
+                    <div className="flex items-center gap-2">
+                      <code className="text-[10px] font-mono text-slate-300 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 flex-1 break-all">Minutes: {minuteLists.signal.join(", ")}</code>
+                      <CopyButton text={cronExpr(minuteLists.signal)} />
+                    </div>
+                    <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
+                      <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.signalPayload}</code>
+                      <CopyButton text={cronSetup.signalPayload} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCronTest("signal")}
+                      disabled={cronTestLoading}
+                      className="px-3 py-1.5 text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
+                    >
+                      {cronTestLoading ? "Testing..." : "▶ Test-send this exact signal now"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="text-[10.5px] text-amber-300 bg-amber-950/30 border border-amber-900/40 rounded-lg p-2">
+                  Custom two-job schedules need a whole-minute interval that divides the hour (e.g. 2, 5, 15, 30).
+                  Your interval is {String(cronSetup.intervalMinutes)} — use the single every-minute cycle job above instead (recommended).
+                </p>
+              )}
+            </div>
+
             {cronTestResult && (
               <p className="text-[10.5px] bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200">{cronTestResult}</p>
             )}
@@ -624,6 +700,14 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
               <b className="text-slate-300">Tip:</b> One job, every 1 minute — the server sends the alert in the last minute of each {cronSetup.intervalMinutes}-minute block and the signal in the first minute of the next block, always 1 minute apart, always alert first.
               Each signal states its exact Nairobi (EAT) next-signal time, then expires: the next cycle posts the expiry notice and auto-deletes it (set "Send every" to 15 minutes for the 15-minute wording).
             </p>
+
+            <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-2.5 text-[10px] text-slate-400 space-y-1">
+              <p><b className="text-slate-200">Where expiry + auto-delete run automatically:</b></p>
+              <p>✅ <b className="text-emerald-300">GitHub Actions workflow</b> (repo Secrets set) — chains every signal unattended, 24/7.</p>
+              <p>✅ <b className="text-emerald-300">These test buttons</b> — each test expires the previous test's signal.</p>
+              <p>✅ <b className="text-emerald-300">Open app</b> — the History sweep expires + deletes anything delivered, every 30s.</p>
+              <p>⚠️ <b className="text-amber-300">Plain cron-job.org bodies alone</b> deliver accurate alerts + signals but cannot name the previous message to delete (static text) — old channel messages stay until one of the three paths above runs.</p>
+            </div>
           </div>
           );
         })()}
