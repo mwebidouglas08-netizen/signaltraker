@@ -13,6 +13,21 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.text({ type: ["text/plain", "application/*+json"] }));
 
+// A truncated/invalid JSON body makes body-parser throw BEFORE any route runs,
+// and Express's default is an HTML 400 page (cron-job.org shows it as a bare
+// "Bad Request"). Convert it into actionable JSON instead.
+app.use((err: any, _req: any, res: any, next: any) => {
+  if (err && (err.type === "entity.parse.failed" || (err instanceof SyntaxError && "body" in err))) {
+    res.status(400).json({
+      success: false,
+      error: "Request body is not valid JSON (it was likely truncated while copying). Re-copy the whole body with the Copy button and paste it exactly.",
+      hint: "In cron-job.org use Method POST + header Content-Type: application/json + the exact body — or use the GET-mode URL from the app, which needs no body at all.",
+    });
+    return;
+  }
+  next(err);
+});
+
 // Normalize: cron-job.org may deliver the JSON payload as a raw string when
 // Content-Type wasn't set to application/json. Parse it back into an object.
 function normalizedBody(req: any): any {

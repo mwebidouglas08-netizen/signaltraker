@@ -116,11 +116,23 @@ running both at the same interval doubles the messages.
 
 **cron-job.org shows failed executions:**
 Open its execution log and read the JSON body:
+- `Request body is not valid JSON` → the pasted body was truncated (partial
+  copy). Re-copy the WHOLE body with the Copy button — it must start with
+  `{` and end with `}` — or avoid bodies entirely with the GET-mode URLs.
 - `botToken is required` / `chatId is required` → the job's Body is empty or
   not valid JSON. Causes: (1) Body field left blank, (2) Request method left
-  on GET, (3) Content-Type header missing so the body arrived as plain text —
-  the server now recovers case (3) automatically, but set
-  `Content-Type: application/json` anyway. Re-paste via the Copy button.
+  on GET — either switch the method to POST with the body, or use the
+  GET-mode URL with an empty body, (3) Content-Type header missing so the
+  body arrived as plain text — the server now recovers case (3)
+  automatically, but set `Content-Type: application/json` anyway. Re-paste
+  via the Copy button.
+- cron-job.org itself says *"the server could not understand the request.
+  Check the request body, headers and method"* → that text is cron-job.org
+  rejecting the job definition (not our server): the method/body/headers
+  combination is invalid, e.g. a body was pasted while Method is GET, the URL
+  field contains line breaks, or a header line is malformed. Simplest fix:
+  use the app's **GET-mode URLs** (Method GET, no body, no extra headers),
+  which cannot trigger this validation error.
 - `Bot token is invalid` (at Enable time) → fresh token from @BotFather first.
 - `Unauthorized cron trigger` → add the `Authorization: Bearer ...` header
   with the same `CRON_SECRET` value as in Vercel, or remove `CRON_SECRET`
