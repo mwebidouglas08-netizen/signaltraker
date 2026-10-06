@@ -300,13 +300,46 @@ export default function App() {
     }
   }, []);
 
-  // ── Auto-delete sent signals from Telegram 10 minutes after they were sent ──
-  // Prevents old signals from accumulating in the channel after they've already
-  // been acted on. Runs a periodic sweep every 30 seconds.
-  const AUTO_DELETE_AFTER_MS = 10 * 60 * 1000; // 10 minutes
+  // ── Signal expiry lifecycle: notice + auto-delete ───────────────────────────
+  // Each sent signal is valid for `validMinutes` (server signals carry the
+  // cron interval; browser scanner signals default to 5 = the scanner's
+  // active window). When the window ends, this sweep — every 30 seconds —
+  // 1. posts the EXPIRED notice to the channel (signals only, not alerts),
+  // 2. deletes the expired message from the Telegram channel,
+  // 3. removes the record from the app (state + localStorage).
+  // A signal is only removed after Telegram confirms deletion (or reports it
+  // already gone); network failures are retried on the next sweep.
+  const DEFAULT_SIGNAL_VALIDITY_MIN = 5;
+
+  function readSiteName(): string {
+    try {
+      const cfg = JSON.parse(localStorage.getItem("signal_site_config") || "{}");
+      return cfg.siteName || "kicktrade";
+    } catch {
+      return "kicktrade";
+    }
+  }
+
+  function readServerIntervalFallback(): number {
+    try {
+      const v = parseFloat(localStorage.getItem("server_broadcast_interval") || "");
+      if (isFinite(v) && v >= 1) return Math.min(1440, v);
+    } catch { /* ignore */ }
+    return 15;
+  }
+
+  function buildLocalExpiryNotice(site: string, mins: number): string {
+    const w = mins % 1 === 0 ? `${mins} minutes` : `${mins.toFixed(1)} minutes`;
+    return (
+      `⌛ <b>${site} signal AI SIGNAL EXPIRED</b>\n\n` +
+      `This signal has expired.\n` +
+      `⏳ Next signal window: in ${w}\n\n` +
+      `Wait for the next signal in the next ${w}.`
+    );
+  }
 
   useEffect(() => {
-    const sweepAndDelete = async () => {
+    const sweepExpired = async () => {
       const raw = localStorage.getItem(LOCAL_STORAGE_KEY_SIGNALS);
       if (!raw) return;
 
@@ -322,14 +355,38 @@ export default function App() {
         if (!sig.sentMessageId || !sig.botTokenUsed || !sig.chatIdUsed) return false;
         const sentAt = new Date(sig.createdAt).getTime();
         if (isNaN(sentAt)) return false;
-        return now - sentAt >= AUTO_DELETE_AFTER_MS;
+        const validityMs = (sig.validMinutes ?? DEFAULT_SIGNAL_VALIDITY_MIN) * 60000;
+        return now - sentAt >= validityMs;
       });
 
       if (due.length === 0) return;
 
+      const removedIds: string[] = [];
+
       for (const sig of due) {
         try {
-          await fetch("/api/telegram/delete", {
+          // 1. Expiry notice first (signals only — alerts delete silently).
+          if (!sig.isAlert) {
+            try {
+              await fetch("/api/telegram/send", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  botToken: sig.botTokenUsed,
+                  chatId: sig.chatIdUsed,
+                  text: buildLocalExpiryNotice(
+                    sig.siteName || readSiteName(),
+                    sig.validMinutes ?? readServerIntervalFallback()
+                  ),
+                }),
+              });
+            } catch (noticeErr) {
+              console.error(`Expiry notice failed for signal ${sig.id}:`, noticeErr);
+            }
+          }
+
+          // 2. Delete the expired message from the channel.
+          const delRes = await fetch("/api/telegram/delete", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -338,24 +395,32 @@ export default function App() {
               messageId: sig.sentMessageId,
             }),
           });
+          const delData = await delRes.json().catch(() => ({}));
+          if (delRes.ok && (delData as any).success !== false) {
+            removedIds.push(sig.id);
+          } else {
+            console.error(`Auto-delete failed for signal ${sig.id}:`, (delData as any).error || delRes.status);
+          }
         } catch (err) {
-          console.error(`Auto-delete failed for signal ${sig.id}:`, err);
+          console.error(`Expiry sweep failed for signal ${sig.id} (will retry):`, err);
         }
       }
 
-      // Remove the auto-deleted signals from local state + storage regardless of
-      // individual API outcomes (if Telegram already removed it, that's fine too)
-      const dueIds = new Set(due.map((s) => s.id));
-      setSignals((prev) => {
-        const remaining = prev.filter((s) => !dueIds.has(s.id));
-        localStorage.setItem(LOCAL_STORAGE_KEY_SIGNALS, JSON.stringify(remaining));
-        return remaining;
-      });
+      // 3. Remove confirmed-deleted signals from app state + storage.
+      if (removedIds.length > 0) {
+        const gone = new Set(removedIds);
+        setSignals((prev) => {
+          const remaining = prev.filter((s) => !gone.has(s.id));
+          localStorage.setItem(LOCAL_STORAGE_KEY_SIGNALS, JSON.stringify(remaining));
+          return remaining;
+        });
+        setSelectedSignal((prev) => (prev && gone.has(prev.id) ? null : prev));
+      }
     };
 
     // Run an initial sweep shortly after mount, then every 30 seconds
-    const initialTimer = setTimeout(sweepAndDelete, 5000);
-    const intervalTimer = setInterval(sweepAndDelete, 30 * 1000);
+    const initialTimer = setTimeout(sweepExpired, 5000);
+    const intervalTimer = setInterval(sweepExpired, 30 * 1000);
 
     return () => {
       clearTimeout(initialTimer);
@@ -637,6 +702,51 @@ export default function App() {
     } catch (err: any) {
       return { success: false, error: err.message || "Failed to post." };
     }
+  };
+
+  // Record a server-side (cron/test) delivery into History so the expiry sweep
+  // manages it exactly like browser-sent signals: notice + delete at expiry.
+  const handleServerSignalSent = (entry: {
+    type: "alert" | "signal";
+    messageId: string;
+    chatId: string;
+    chatTitle: string;
+    botToken: string;
+    intervalMinutes: number;
+    siteName: string;
+  }) => {
+    const isAlert = entry.type === "alert";
+    const newSignal: TradingSignal = {
+      id: "srv_" + Date.now(),
+      assetClass: "Server Auto",
+      symbol: isAlert ? "AUTO ALERT" : "AUTO SIGNAL",
+      action: "AUTO",
+      entry: "Server",
+      tp1: "",
+      tp2: "",
+      tp3: "",
+      sl: "",
+      userNotes: isAlert
+        ? "Server pre-signal alert (deletes silently at expiry)"
+        : "Server cron signal (expires, notifies, then auto-deletes)",
+      formattedText: "",
+      rationale: "",
+      status: "ACTIVE",
+      sentMessageId: entry.messageId,
+      botTokenUsed: entry.botToken,
+      chatIdUsed: entry.chatId,
+      chatTitle: entry.chatTitle || config.chatTitle || "Telegram Channel",
+      createdAt: new Date().toISOString(),
+      updateHistory: [],
+      validMinutes: entry.intervalMinutes,
+      siteName: entry.siteName,
+      isAlert,
+    };
+    setSignals((prev) => {
+      const updated = [newSignal, ...prev];
+      localStorage.setItem(LOCAL_STORAGE_KEY_SIGNALS, JSON.stringify(updated));
+      return updated;
+    });
   };
 
   // Direct post helper for auto scanner bot broadcasts
@@ -1243,6 +1353,7 @@ export default function App() {
                   config={config}
                   onChange={persistConfig}
                   aiConfigured={aiConfigured}
+                  onServerSignalSent={handleServerSignalSent}
                 />
               </motion.div>
             ) : (

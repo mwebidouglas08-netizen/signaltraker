@@ -1051,13 +1051,12 @@ export default function TradingSignalForm({
                   <option value="VOLATILITY 100 INDEX">Volatility 100 Index</option>
                   <option value="VOLATILITY 75 (1s) INDEX">Volatility 75 (1s) Index</option>
                   <option value="VOLATILITY 75 INDEX">Volatility 75 Index</option>
+                  <option value="VOLATILITY 50 (1s) INDEX">Volatility 50 (1s) Index</option>
                   <option value="VOLATILITY 50 INDEX">Volatility 50 Index</option>
+                  <option value="VOLATILITY 25 (1s) INDEX">Volatility 25 (1s) Index</option>
                   <option value="VOLATILITY 25 INDEX">Volatility 25 Index</option>
+                  <option value="VOLATILITY 10 (1s) INDEX">Volatility 10 (1s) Index</option>
                   <option value="VOLATILITY 10 INDEX">Volatility 10 Index</option>
-                  <option value="JUMP 100 INDEX">Jump 100 Index</option>
-                  <option value="JUMP 50 INDEX">Jump 50 Index</option>
-                  <option value="BEAR MARKET INDEX">Bear Market Index</option>
-                  <option value="BULL MARKET INDEX">Bull Market Index</option>
                 </select>
                 <div className="pt-1">
                   <input

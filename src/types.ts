@@ -28,6 +28,12 @@ export interface TradingSignal {
   chatTitle: string | null;
   createdAt: string;
   updateHistory: SignalUpdate[];
+  // Expiry lifecycle: validity window in minutes (server signals use the cron
+  // interval, browser scanner signals default to 5). Alerts delete silently.
+  validMinutes?: number;
+  expiryNoticeSent?: boolean;
+  siteName?: string;
+  isAlert?: boolean;
 }
 
 export interface TelegramConfig {

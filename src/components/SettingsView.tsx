@@ -21,6 +21,15 @@ interface Props {
   config: TelegramConfig;
   onChange: (cfg: TelegramConfig) => void;
   aiConfigured: boolean;
+  onServerSignalSent?: (entry: {
+    type: "alert" | "signal";
+    messageId: string;
+    chatId: string;
+    chatTitle: string;
+    botToken: string;
+    intervalMinutes: number;
+    siteName: string;
+  }) => void;
 }
 
 interface ServerStatus {
@@ -121,7 +130,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export default function SettingsView({ config, onChange, aiConfigured }: Props) {
+export default function SettingsView({ config, onChange, aiConfigured, onServerSignalSent }: Props) {
   const handleToggleScanner = () =>
     onChange({ ...config, enableScannerBroadcast: config.enableScannerBroadcast === false ? true : false });
   const handleToggleManual = () =>
@@ -225,6 +234,11 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
       localStorage.setItem("server_broadcast_cron_url", data.cronUrl);
       localStorage.setItem("server_broadcast_alert_payload", data.alertPayload);
       localStorage.setItem("server_broadcast_signal_payload", data.signalPayload);
+      // Persisted for the app's expiry sweep (fallback window) — the payloads
+      // themselves carry the authoritative intervalMinutes per request.
+      localStorage.setItem("server_broadcast_interval", String(data.intervalMinutes ?? intervalMinutes));
+      // Fresh setup → previous cycle's server message (if any) no longer applies.
+      localStorage.removeItem("server_broadcast_last_signal_id");
     } catch (err: any) {
       setServerError(err.message || "Enable failed.");
     } finally {
@@ -246,6 +260,8 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
       localStorage.removeItem("server_broadcast_alert_payload");
       localStorage.removeItem("server_broadcast_signal_payload");
       localStorage.removeItem("server_broadcast_cron_payload");
+      localStorage.removeItem("server_broadcast_interval");
+      localStorage.removeItem("server_broadcast_last_signal_id");
       await fetchStatus();
     } catch (err: any) {
       setServerError(err.message || "Disable failed.");
@@ -255,26 +271,65 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
   };
 
   // ── Test the EXACT saved payload against the cron endpoint ─────────────────
-  // This performs the same POST cron-job.org will perform, so a success here
-  // proves the copied URL + body are correct before touching cron-job.org.
+  // Same POST cron-job.org will perform, PLUS full-cycle chaining: the
+  // previous test's server signal (if any) is passed as deletePriorMessageIds
+  // with sendExpiryNotice, so each test expires the previous signal exactly
+  // like the live cycle does. The new delivery is recorded into History so
+  // the app's expiry sweep manages it too.
   const handleCronTest = async (which: "alert" | "signal") => {
     if (!cronSetup) return;
     setCronTestLoading(true);
     setCronTestResult(null);
     setServerError("");
     try {
-      const payload = which === "alert" ? cronSetup.alertPayload : cronSetup.signalPayload;
+      const raw = which === "alert" ? cronSetup.alertPayload : cronSetup.signalPayload;
+      let bodyObj: any;
+      try {
+        bodyObj = JSON.parse(raw);
+      } catch {
+        throw new Error("Saved payload is corrupt JSON. Click Stop then Enable again to regenerate it.");
+      }
+      const priorId = localStorage.getItem("server_broadcast_last_signal_id");
+      if (priorId && /^\d+$/.test(priorId)) {
+        bodyObj = { ...bodyObj, deletePriorMessageIds: [parseInt(priorId, 10)], sendExpiryNotice: true };
+      }
       const res = await fetch(cronSetup.cronUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: payload,
+        body: JSON.stringify(bodyObj),
       });
       const ct = res.headers.get("content-type") || "";
       const data = ct.includes("application/json") ? await res.json() : { error: await res.text() };
       if (!res.ok || (data as any).success === false) {
         throw new Error((data as any).error || (data as any).hint || `Test failed (HTTP ${res.status}).`);
       }
-      setCronTestResult(`✅ ${which} test delivered to "${(data as any).chatTitle || (data as any).chatIdUsed || "channel"}" (${(data as any).chatIdUsed || "id unknown"}, messageId ${(data as any).messageId}). Your copied values are correct — now paste them into cron-job.org.`);
+      const cleanup = (data as any).cleanup;
+      const cleanupNote = cleanup && (cleanup.noticeSent || (cleanup.deleted || []).length > 0)
+        ? ` Prior expired signal cleaned: notice=${cleanup.noticeSent ? "sent" : "skipped"}, deleted=[${(cleanup.deleted || []).join(",") || "none"}].`
+        : "";
+      setCronTestResult(`✅ ${which} test delivered to "${(data as any).chatTitle || (data as any).chatIdUsed || "channel"}" (${(data as any).chatIdUsed || "id unknown"}, messageId ${(data as any).messageId}).${cleanupNote} Your copied values are correct — now paste them into cron-job.org.`);
+      // Chain: this delivery becomes the "prior" for the next cycle, and any
+      // consumed prior is cleared (the request above already expired it).
+      if (which === "signal" && (data as any).messageId) {
+        localStorage.setItem("server_broadcast_last_signal_id", String((data as any).messageId));
+      } else if (which === "alert") {
+        localStorage.removeItem("server_broadcast_last_signal_id");
+      }
+      if (onServerSignalSent && (data as any).messageId) {
+        try {
+          const insp = inspectPayload(raw);
+          const siteCfg = getSiteConfigLocal();
+          onServerSignalSent({
+            type: which,
+            messageId: String((data as any).messageId),
+            chatId: (data as any).chatIdUsed || insp.chatId,
+            chatTitle: (data as any).chatTitle || "",
+            botToken: insp.botToken,
+            intervalMinutes: cronSetup.intervalMinutes,
+            siteName: siteCfg.siteName,
+          });
+        } catch { /* recording must never fail the test */ }
+      }
       fetchStatus();
     } catch (err: any) {
       setCronTestResult(`❌ ${which} test failed: ${err.message || "unknown error"}`);
@@ -535,7 +590,7 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
 
             <p className="text-[10px] text-slate-500">
               <b className="text-slate-300">Tip:</b> Create and save Cron Job 1 first. Wait exactly 1 minute, then create and save Cron Job 2. They will naturally be offset by 1 minute forever.
-              If a test-send fails, fix what it says (usually bot-not-admin or wrong ID) and click Enable again for fresh bodies.
+              Each signal is valid for your interval, then the next cycle posts the expiry notice and auto-deletes it (set "Send every" to 15 minutes if you want the 15-minute wording).
             </p>
           </div>
           );
