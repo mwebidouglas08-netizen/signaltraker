@@ -603,6 +603,31 @@ function buildServerSignal(cfg: CronConfig): string {
 // ── Validate and return a config object from any source (configure or cron) ──
 // Accepts chatId as string OR number (some HTTP clients drop the quotes and
 // send {"chatId": -100123...} as JSON numeric — still a valid destination).
+// activeContracts arrives as an array in POST JSON, but as repeated keys,
+// a JSON string, or a comma-separated string in GET query mode — accept all.
+function normalizeContracts(v: any): string[] {
+  const fallback = ["UNDER 7", "UNDER 8", "OVER 2", "OVER 3"];
+  if (Array.isArray(v)) {
+    const list = v.map((x) => String(x ?? "").trim()).filter(Boolean);
+    return list.length > 0 ? list : fallback;
+  }
+  if (typeof v === "string" && v.trim()) {
+    const t = v.trim();
+    try {
+      const p = JSON.parse(t);
+      if (Array.isArray(p)) {
+        const list = p.map((x) => String(x ?? "").trim()).filter(Boolean);
+        if (list.length > 0) return list;
+      }
+    } catch {
+      // not JSON — fall through to comma split
+    }
+    const list = t.split(",").map((x) => x.trim()).filter(Boolean);
+    if (list.length > 0) return list;
+  }
+  return fallback;
+}
+
 function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false; error: string } {
   const rawToken = (body || {}).botToken;
   const rawChat = (body || {}).chatId;
@@ -625,9 +650,7 @@ function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false
       botName: body.botName || "USE KICKTRADE BOT",
       botSignature: body.botSignature || "kicktrade Over/Under Bot",
       hashtags: body.hashtags || "#TradingSignal #kicktrade #Signals",
-      activeContracts: Array.isArray(body.activeContracts) && body.activeContracts.length > 0
-        ? body.activeContracts
-        : ["UNDER 7", "UNDER 8", "OVER 2", "OVER 3"],
+      activeContracts: normalizeContracts(body.activeContracts),
     },
   };
 }
@@ -710,11 +733,17 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
   // Vercel deletes, or localhost), say so explicitly — cron-job.org would ping
   // a dead URL and report an HTTP error forever.
   const prodHost = vercelProd.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  // Preview deployments (signaltraker-<hash>-<team>.vercel.app) are deleted by
+  // Vercel — a cron URL pointing at one works today and 404s tomorrow.
+  const looksLikePreview =
+    /\.vercel\.app$/i.test(host) && /(^|-)[0-9a-f]{6,}(-|$)/i.test(host);
   const hostWarning = isLocal
     ? "You enabled from localhost — cron-job.org cannot reach localhost. Redeploy, open the LIVE app URL, and click Enable there so the cron URL is public."
-    : prodHost && host.toLowerCase() !== prodHost.toLowerCase()
-      ? `You enabled from ${host} but production is ${prodHost}. Update APP_URL or re-enable from https://${prodHost} — otherwise cron-job.org pings this non-production URL and fails.`
-      : null;
+    : looksLikePreview
+      ? `This looks like a Vercel PREVIEW deployment URL (${host}) — previews get deleted and cron-job.org will then fail. Set APP_URL in Vercel to your production domain, redeploy, and re-enable from the production URL.`
+      : prodHost && host.toLowerCase() !== prodHost.toLowerCase()
+        ? `You enabled from ${host} but production is ${prodHost}. Update APP_URL or re-enable from https://${prodHost} — otherwise cron-job.org pings this non-production URL and fails.`
+        : null;
 
   const base = {
     botToken: cfg.botToken,
@@ -768,6 +797,10 @@ app.get("/api/autobroadcast/status", (_req, res) => {
     lastRunAt: lastSendTime,
     totalSentThisSession,
     lastError: lastSendError,
+    // Lets the UI tell the user EXACTLY whether cron-job.org must send an
+    // Authorization header (true only when CRON_SECRET is set in Vercel).
+    // The secret value itself is never exposed here.
+    cronAuthRequired: (process.env.CRON_SECRET || "").trim().length > 0,
   });
 });
 
@@ -779,6 +812,8 @@ app.get("/api/autobroadcast/diagnose", (_req, res) => {
     lastRunAt: lastSendTime,
     totalSentThisSession,
     lastError: lastSendError,
+    cronAuthRequired: (process.env.CRON_SECRET || "").trim().length > 0,
+    cronMethods: ["POST with JSON body (recommended)", "GET with query params (fallback)"],
     hint: "If signals are not sending, check that your cron-job.org job is active and the request body is set correctly.",
   });
 });

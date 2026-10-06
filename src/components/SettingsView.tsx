@@ -63,6 +63,23 @@ function maskTokenFull(token: string): string {
   return token.slice(0, 6) + "..." + token.slice(-4) + ` (${token.length} chars)`;
 }
 
+// Build the GET-mode cron URL for one payload: same data as the POST body,
+// URL-encoded into the query string (handles # in hashtags, spaces in names).
+// Lets a cron job work with Method: GET and no body at all.
+function buildGetUrl(cronUrl: string, payload: string): string | null {
+  try {
+    const p = JSON.parse(payload);
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(p)) {
+      if (Array.isArray(v)) v.forEach((x) => q.append(k, String(x)));
+      else if (v !== undefined && v !== null) q.append(k, String(v));
+    }
+    return `${cronUrl}?${q.toString()}`;
+  } catch {
+    return null;
+  }
+}
+
 function getSiteConfigLocal() {
   try {
     const cfg = JSON.parse(localStorage.getItem("signal_site_config") || "{}");
@@ -118,6 +135,9 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
   const [intervalMinutes, setIntervalMinutes] = useState(2);
   const [cronTestLoading, setCronTestLoading] = useState(false);
   const [cronTestResult, setCronTestResult] = useState<string | null>(null);
+  // Whether the DEPLOYED server demands an Authorization header on cron calls
+  // (true only when CRON_SECRET is set in Vercel). Read live — never guessed.
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [isEnabled, setIsEnabled] = useState(() => {
     return localStorage.getItem("server_broadcast_enabled") === "true";
   });
@@ -128,6 +148,7 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
       if (!res.ok) return;
       const data = await res.json();
       setServerStatus(data);
+      if (typeof data.cronAuthRequired === "boolean") setAuthRequired(data.cronAuthRequired);
     } catch {}
   };
 
@@ -380,6 +401,8 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
           const chatMatches =
             !!payloadChat && !!config.chatId && payloadChat.trim() === config.chatId.trim();
           const isStale = !tokenMatches || !chatMatches;
+          const alertGetUrl = buildGetUrl(cronSetup.cronUrl, cronSetup.alertPayload);
+          const signalGetUrl = buildGetUrl(cronSetup.cronUrl, cronSetup.signalPayload);
           return (
           <div className="bg-slate-900/60 border border-emerald-900/30 rounded-xl p-4 space-y-4">
             <div className="flex items-center gap-1.5">
@@ -393,6 +416,20 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
                 Go to <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="underline font-bold">cron-job.org</a> → free account → create <b>2 separate cron jobs</b> below. Same URL, same interval — different bodies, 1 minute apart. Alert always fires 1 min before signal, at any interval.
               </p>
             </div>
+
+            {/* ── Server auth requirement (read live from the deployed server) ── */}
+            {authRequired === true && (
+              <div className="bg-amber-950/30 border border-amber-900/40 rounded-lg p-2.5 text-[10.5px] text-amber-200">
+                <b>🔐 Your server requires an auth header.</b> In <b>both</b> cron-job.org jobs add header{" "}
+                <code className="font-mono bg-slate-950 px-1 rounded">Authorization: Bearer (your CRON_SECRET value from Vercel)</code>.
+                Without it every run fails with HTTP 401 — even with a perfect URL and body.
+              </div>
+            )}
+            {authRequired === false && (
+              <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-2 text-[10px] text-slate-400">
+                No auth header needed (server has no CRON_SECRET set). If you add one in Vercel later, refresh this page and add the header to both cron jobs.
+              </div>
+            )}
 
             {/* ── What cron-job.org will actually send (proves the copy is right) ── */}
             <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-3 space-y-1.5">
@@ -429,6 +466,32 @@ export default function SettingsView({ config, onChange, aiConfigured }: Props) 
                 <p className="text-[10.5px] text-rose-300 bg-rose-950/30 border border-rose-900/40 rounded-lg p-2">
                   ❌ This URL is localhost — cron-job.org can never reach it. Deploy to Vercel, open the LIVE URL, and Enable there.
                 </p>
+              )}
+            </div>
+
+            {/* ── Fallback: GET-mode URLs (no body needed) ── */}
+            <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-3 space-y-2">
+              <p className="text-[10.5px] font-bold text-slate-200">🔗 Alternative: GET-mode (if POST keeps failing)</p>
+              <p className="text-[10px] text-slate-400">
+                Same data, encoded in the URL — create the 2 jobs with <b className="text-slate-200">Method: GET</b>, paste one URL per job, leave the body empty.
+              </p>
+              {alertGetUrl && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-amber-300">Job 1 — alert URL:</p>
+                  <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
+                    <code className="text-amber-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{alertGetUrl}</code>
+                    <CopyButton text={alertGetUrl} />
+                  </div>
+                </div>
+              )}
+              {signalGetUrl && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-emerald-300">Job 2 — signal URL:</p>
+                  <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
+                    <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{signalGetUrl}</code>
+                    <CopyButton text={signalGetUrl} />
+                  </div>
+                </div>
               )}
             </div>
 
