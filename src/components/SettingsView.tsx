@@ -38,6 +38,9 @@ interface ServerStatus {
   totalSentThisSession?: number;
   lastError?: string | null;
   persistenceMode?: string;
+  buildTag?: string;
+  memoryEntries?: number;
+  cronAuthRequired?: boolean;
 }
 
 interface CronSetup {
@@ -699,6 +702,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
             <p className="text-[10px] text-slate-500">
               <b className="text-slate-300">Tip:</b> One job, every 1 minute — the server sends the alert in the last minute of each {cronSetup.intervalMinutes}-minute block and the signal in the first minute of the next block, always 1 minute apart, always alert first.
               Each signal states its exact Nairobi (EAT) next-signal time, then expires: the next cycle posts the expiry notice and auto-deletes it (set "Send every" to 15 minutes for the 15-minute wording).
+              Run <b className="text-rose-300">exactly one</b> scheduler (this job <b className="text-slate-300">or</b> the GitHub workflow — never both, no duplicate jobs): duplicates interleave and destroy the order.
             </p>
 
             <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-2.5 text-[10px] text-slate-400 space-y-1">
@@ -843,6 +847,25 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border uppercase ${config.botToken ? "bg-emerald-950/40 text-emerald-400 border-emerald-900" : "bg-rose-950/30 text-rose-400 border-rose-900"}`}>
             {config.botToken ? "Configured" : "Not set"}
           </span>
+        </div>
+
+        <div className="flex items-center justify-between p-2.5 bg-slate-900/40 border border-slate-800 rounded-xl">
+          <div>
+            <span className="text-xs font-semibold text-slate-200">Server build</span>
+            <p className="text-[10px] text-slate-500">
+              {serverStatus?.buildTag
+                ? `Deployed: ${serverStatus.buildTag} · tracking ${serverStatus.memoryEntries ?? 0} signal(s) for auto-expiry`
+                : "Not checked yet — open Settings to poll the server"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={fetchStatus}
+            title="Refresh server status"
+            className="p-1.5 text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
         </div>
 
         {serverStatus?.lastRunAt && (

@@ -905,6 +905,9 @@ function checkCronAuth(req: any): { ok: true } | { ok: false; error: string } {
   return { ok: false, error: "Unauthorized cron trigger (bad or missing CRON_SECRET)." };
 }
 
+// Build marker — bump when the cron protocol changes. The UI + diagnose page
+// show it so a stale Vercel deployment is provable instead of guessable.
+const BUILD_TAG = "2026-10-06/cycle-6";
 let lastSendTime: string | null = null;
 let totalSentThisSession = 0;
 let lastSendError: string | null = null;
@@ -1031,6 +1034,8 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
 app.get("/api/autobroadcast/status", (_req, res) => {
   res.json({
     serverReachable: true,
+    buildTag: BUILD_TAG,
+    memoryEntries: lastSignalMemory.size,
     persistenceMode: "stateless-config-in-request",
     currentPhase: "determined-by-request-body",
     nextMessage: "alert fires from Cron Job 1, signal fires from Cron Job 2 — 1 minute later",
@@ -1045,6 +1050,8 @@ app.get("/api/autobroadcast/diagnose", (_req, res) => {
   res.json({
     architecture: "stateless — no KV or Redis required",
     endpointReachable: true,
+    buildTag: BUILD_TAG,
+    memoryEntries: lastSignalMemory.size,
     lastRunAt: lastSendTime,
     totalSentThisSession,
     lastError: lastSendError,
@@ -1330,6 +1337,20 @@ async function handleCronBroadcast(req: any, res: any) {
       };
 
       if (elapsed < 60000) {
+        // Cold-start / first-ever signal: no prior alert exists in-channel,
+        // so send the alert immediately first — every signal is then always
+        // preceded by an alert (best-effort; the signal sends regardless).
+        let catchUpAlert: number | null = null;
+        let catchUpFailed: string | null = null;
+        if (!lastSignalMemory.has(memKey(cleanToken, cleanChatId))) {
+          try {
+            const ca = await sendOne("alert");
+            if (ca.ok === false) catchUpFailed = ca.error;
+            else catchUpAlert = ca.messageId;
+          } catch (err: any) {
+            catchUpFailed = err.message;
+          }
+        }
         const r = await sendOne("signal");
         if (r.ok === false) {
           sendError(400, r.error, { advice: r.advice, chatIdUsed: r.chatIdUsed });
@@ -1340,6 +1361,7 @@ async function handleCronBroadcast(req: any, res: any) {
           success: true, phase: "signal", sent: true, type: "signal",
           messageId: r.messageId, totalSent: totalSentThisSession,
           chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup,
+          catchUpAlert, catchUpFailed,
           nextEvent: "alert", nextEventAt: new Date(nextAlertAt).toISOString(),
           nextEventClock: formatEatClock(nextAlertAt),
           requiredSchedule: "every-1-minute",
