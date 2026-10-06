@@ -108,13 +108,27 @@ function buildGetUrl(cronUrl: string, payload: string): string | null {
   }
 }
 
+const CANONICAL_BOT_NAME = "mrzetuzetu sv 1 bot";
+const LEGACY_BOT_NAMES = ["use deriv bot", "use kicktrade bot", "use snipper killer bot"];
+function migrateSiteBotName(cfg: any): any {
+  const cur = String(cfg?.botName || "").trim();
+  if (!cur || LEGACY_BOT_NAMES.includes(cur.toLowerCase())) {
+    const next = { ...(cfg || {}), botName: CANONICAL_BOT_NAME };
+    try {
+      localStorage.setItem("signal_site_config", JSON.stringify({ ...(cfg || {}), botName: CANONICAL_BOT_NAME }));
+    } catch { /* storage unavailable — return migrated copy anyway */ }
+    return next;
+  }
+  return cfg;
+}
+
 function getSiteConfigLocal() {
   try {
-    const cfg = JSON.parse(localStorage.getItem("signal_site_config") || "{}");
+    const cfg = migrateSiteBotName(JSON.parse(localStorage.getItem("signal_site_config") || "{}"));
     return {
       siteName: cfg.siteName || "kicktrade",
       promoUrl: cfg.promoUrl || "http://kicktrade.site",
-      botName: cfg.botName || "USE KICKTRADE BOT",
+      botName: cfg.botName || CANONICAL_BOT_NAME,
       botSignature: cfg.botSignature || "kicktrade Over/Under Bot",
       hashtags: cfg.hashtags || "#TradingSignal #kicktrade #Signals",
     };
@@ -122,7 +136,7 @@ function getSiteConfigLocal() {
     return {
       siteName: "kicktrade",
       promoUrl: "http://kicktrade.site",
-      botName: "USE KICKTRADE BOT",
+      botName: CANONICAL_BOT_NAME,
       botSignature: "kicktrade Over/Under Bot",
       hashtags: "#TradingSignal #kicktrade #Signals",
     };
