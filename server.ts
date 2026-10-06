@@ -909,6 +909,18 @@ let lastSendTime: string | null = null;
 let totalSentThisSession = 0;
 let lastSendError: string | null = null;
 
+// Best-effort last-signal memory (per warm server instance): chat-scoped
+// record of the most recent signal THIS instance sent, so unattended cron
+// pings can post its expiry notice + delete it with zero client cooperation.
+// Degrades safely — cold starts and other instances simply skip (the next
+// signal tick self-heals). Bounded; tokens never leave instance RAM.
+interface MemEntry { messageId: number; sentAtMs: number; validityMin: number; noticed: boolean }
+const lastSignalMemory = new Map<string, MemEntry>();
+const MEMORY_CAP = 500;
+function memKey(token: string, chat: string): string {
+  return `${token}:${chat}`;
+}
+
 app.post("/api/autobroadcast/configure", async (req, res) => {
   const body = normalizedBody(req);
   const parsed = parseCronConfig(body);
@@ -1109,12 +1121,10 @@ async function handleCronBroadcast(req: any, res: any) {
     return { noticeSent: false, deleted: [], deleteErrors: [] };
   }
   async function sendOne(
-    messageType: "alert" | "signal",
-    deletePrior: number[],
-    wantExpiryNotice: boolean
+    messageType: "alert" | "signal"
   ): Promise<
     | { ok: false; error: string; chatIdUsed: string; advice: string }
-    | { ok: true; messageId: number; chatTitle: string; cleanup: Cleanup }
+    | { ok: true; messageId: number; chatTitle: string }
   > {
     const text = messageType === "alert" ? buildAlertMessage(cfg) : buildServerSignal(cfg);
     const data = await tgSend(text, true);
@@ -1131,17 +1141,30 @@ async function handleCronBroadcast(req: any, res: any) {
     totalSentThisSession += 1;
     lastSendError = null;
 
+    console.log(`[AutoBroadcast] ${messageType} sent to ${cleanChatId}. messageId=${data.result.message_id} total=${totalSentThisSession}`);
+    return {
+      ok: true,
+      messageId: data.result.message_id,
+      chatTitle: data.result.chat?.title || data.result.chat?.username || cfg.chatTitle || "",
+    };
+  }
+
+  // Unified post-send cleanup: explicit chaining (caller-supplied prior IDs +
+  // notice flag) PLUS best-effort memory expiry (previous signal this server
+  // instance sent to the same chat, now past its validity window). Memory
+  // makes plain unattended cron pings self-cleaning with zero cooperation;
+  // it degrades safely (cold start / other instance simply skips).
+  async function runPostSendCleanup(
+    deletePrior: number[],
+    wantExpiryNotice: boolean,
+    mem: { key: string; justSentId: number; validityMin: number; nowMs: number } | null
+  ): Promise<Cleanup> {
     const cleanup = freshCleanup();
-    if (wantExpiryNotice) {
-      try {
-        const notice = await tgSend(buildExpiryNotice(cfg), true);
-        cleanup.noticeSent = !!notice.ok;
-        if (!notice.ok) cleanup.deleteErrors.push(`notice: ${notice.description || "send failed"}`);
-      } catch (err: any) {
-        cleanup.deleteErrors.push(`notice: ${err.message}`);
-      }
-    }
-    for (const mid of deletePrior) {
+    const handled = new Set<number>();
+
+    async function deleteId(mid: number): Promise<boolean> {
+      if (handled.has(mid)) return true;
+      handled.add(mid);
       try {
         const del = await safeTelegramFetch(
           `https://api.telegram.org/bot${cleanToken}/deleteMessage`,
@@ -1153,22 +1176,63 @@ async function handleCronBroadcast(req: any, res: any) {
         );
         if (del.ok) {
           cleanup.deleted.push(mid);
-        } else {
-          const desc = String(del.description || "");
-          if (/not found|can't be deleted/i.test(desc)) cleanup.deleted.push(mid);
-          else cleanup.deleteErrors.push(`delete ${mid}: ${desc || "failed"}`);
+          return true;
         }
+        const desc = String(del.description || "");
+        if (/not found|can't be deleted/i.test(desc)) {
+          cleanup.deleted.push(mid);
+          return true;
+        }
+        cleanup.deleteErrors.push(`delete ${mid}: ${desc || "failed"}`);
+        return false;
       } catch (err: any) {
         cleanup.deleteErrors.push(`delete ${mid}: ${err.message}`);
+        return false;
       }
     }
 
-    return {
-      ok: true,
-      messageId: data.result.message_id,
-      chatTitle: data.result.chat?.title || data.result.chat?.username || cfg.chatTitle || "",
-      cleanup,
-    };
+    async function postNotice(): Promise<void> {
+      try {
+        const notice = await tgSend(buildExpiryNotice(cfg), true);
+        if (notice.ok) cleanup.noticeSent = true;
+        else cleanup.deleteErrors.push(`notice: ${notice.description || "send failed"}`);
+      } catch (err: any) {
+        cleanup.deleteErrors.push(`notice: ${err.message}`);
+      }
+    }
+
+    if (wantExpiryNotice) await postNotice();
+    for (const mid of deletePrior) await deleteId(mid);
+
+    if (mem) {
+      const prev = lastSignalMemory.get(mem.key);
+      if (prev && prev.messageId !== mem.justSentId && !handled.has(prev.messageId)) {
+        const ageMs = mem.nowMs - prev.sentAtMs;
+        if (ageMs >= Math.max(1, prev.validityMin) * 60000) {
+          if (!prev.noticed && !cleanup.noticeSent) {
+            await postNotice();
+            if (cleanup.noticeSent) prev.noticed = true;
+          }
+          if (await deleteId(prev.messageId)) lastSignalMemory.delete(mem.key);
+        }
+      }
+      lastSignalMemory.set(mem.key, {
+        messageId: mem.justSentId,
+        sentAtMs: mem.nowMs,
+        validityMin: mem.validityMin,
+        noticed: false,
+      });
+      if (lastSignalMemory.size > MEMORY_CAP) {
+        const oldest = lastSignalMemory.keys().next();
+        if (!oldest.done) lastSignalMemory.delete(oldest.value);
+      }
+    }
+
+    return cleanup;
+  }
+
+  function memFor(justSentId: number, nowMs: number): { key: string; justSentId: number; validityMin: number; nowMs: number } {
+    return { key: memKey(cleanToken, cleanChatId), justSentId, validityMin: cfg.intervalMinutes, nowMs };
   }
 
   // Dispatch inputs. Legacy explicit `type` keeps old behavior; `force` sends
@@ -1187,15 +1251,19 @@ async function handleCronBroadcast(req: any, res: any) {
   try {
     // 1. Forced immediate send (UI demo buttons).
     if (useForce) {
-      const r = await sendOne(force, deletePrior, wantExpiryNotice);
+      const r = await sendOne(force);
       if (r.ok === false) {
         sendError(400, r.error, { advice: r.advice, chatIdUsed: r.chatIdUsed });
         return;
       }
+      const cleanup = await runPostSendCleanup(
+        deletePrior, wantExpiryNotice,
+        force === "signal" ? memFor(r.messageId, nowMs) : null
+      );
       res.json({
         success: true, phase: "forced-" + force, sent: true, type: force,
         messageId: r.messageId, totalSent: totalSentThisSession,
-        chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
+        chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup,
       });
       return;
     }
@@ -1203,15 +1271,19 @@ async function handleCronBroadcast(req: any, res: any) {
     // 2. Legacy explicit type (old two-job bodies) — behavior unchanged.
     if (hasLegacyType) {
       const messageType: "alert" | "signal" = (source as any).type === "alert" ? "alert" : "signal";
-      const r = await sendOne(messageType, deletePrior, wantExpiryNotice);
+      const r = await sendOne(messageType);
       if (r.ok === false) {
         sendError(400, r.error, { advice: r.advice, chatIdUsed: r.chatIdUsed });
         return;
       }
+      const cleanup = await runPostSendCleanup(
+        deletePrior, wantExpiryNotice,
+        messageType === "signal" ? memFor(r.messageId, nowMs) : null
+      );
       res.json({
         success: true, phase: messageType, sent: true, type: messageType,
         messageId: r.messageId, totalSent: totalSentThisSession,
-        chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
+        chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup,
       });
       return;
     }
@@ -1222,21 +1294,23 @@ async function handleCronBroadcast(req: any, res: any) {
     if ((source as any).mode === "cycle") {
       const N = cfg.intervalMinutes;
       if (N < 2) {
-        const ra = await sendOne("alert", [], false);
+        const ra = await sendOne("alert");
         if (ra.ok === false) {
           sendError(400, ra.error, { advice: ra.advice, chatIdUsed: ra.chatIdUsed });
           return;
         }
-        const rs = await sendOne("signal", deletePrior, wantExpiryNotice);
+        const raCleanup = await runPostSendCleanup([], false, null);
+        const rs = await sendOne("signal");
         if (rs.ok === false) {
           sendError(400, rs.error, { advice: rs.advice, chatIdUsed: rs.chatIdUsed });
           return;
         }
+        const rsCleanup = await runPostSendCleanup(deletePrior, wantExpiryNotice, memFor(rs.messageId, nowMs));
         res.json({
           success: true, phase: "both", sent: true,
           alertMessageId: ra.messageId, messageId: rs.messageId,
           totalSent: totalSentThisSession, chatIdUsed: cleanChatId,
-          chatTitle: rs.chatTitle, cleanup: rs.cleanup,
+          chatTitle: rs.chatTitle, cleanup: rsCleanup, alertCleanup: raCleanup,
         });
         return;
       }
@@ -1256,15 +1330,16 @@ async function handleCronBroadcast(req: any, res: any) {
       };
 
       if (elapsed < 60000) {
-        const r = await sendOne("signal", deletePrior, wantExpiryNotice);
+        const r = await sendOne("signal");
         if (r.ok === false) {
           sendError(400, r.error, { advice: r.advice, chatIdUsed: r.chatIdUsed });
           return;
         }
+        const cleanup = await runPostSendCleanup(deletePrior, wantExpiryNotice, memFor(r.messageId, nowMs));
         res.json({
           success: true, phase: "signal", sent: true, type: "signal",
           messageId: r.messageId, totalSent: totalSentThisSession,
-          chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
+          chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup,
           nextEvent: "alert", nextEventAt: new Date(nextAlertAt).toISOString(),
           nextEventClock: formatEatClock(nextAlertAt),
           requiredSchedule: "every-1-minute",
@@ -1273,15 +1348,16 @@ async function handleCronBroadcast(req: any, res: any) {
         return;
       }
       if (elapsed >= blockMs - 60000) {
-        const r = await sendOne("alert", deletePrior, wantExpiryNotice);
+        const r = await sendOne("alert");
         if (r.ok === false) {
           sendError(400, r.error, { advice: r.advice, chatIdUsed: r.chatIdUsed });
           return;
         }
+        const cleanup = await runPostSendCleanup(deletePrior, wantExpiryNotice, null);
         res.json({
           success: true, phase: "alert", sent: true, type: "alert",
           messageId: r.messageId, totalSent: totalSentThisSession,
-          chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
+          chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup,
           nextEvent: "signal", nextEventAt: new Date(nextSignalAt).toISOString(),
           nextEventClock: formatEatClock(nextSignalAt),
           requiredSchedule: "every-1-minute",
@@ -1304,15 +1380,16 @@ async function handleCronBroadcast(req: any, res: any) {
     }
 
     // 4. Ancient default (no type, no mode) — one signal, unchanged.
-    const r = await sendOne("signal", deletePrior, wantExpiryNotice);
+    const r = await sendOne("signal");
     if (r.ok === false) {
       sendError(400, r.error, { advice: r.advice, chatIdUsed: r.chatIdUsed });
       return;
     }
+    const cleanup = await runPostSendCleanup(deletePrior, wantExpiryNotice, memFor(r.messageId, nowMs));
     res.json({
       success: true, phase: "signal", sent: true, type: "signal",
       messageId: r.messageId, totalSent: totalSentThisSession,
-      chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
+      chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup,
     });
   } catch (err: any) {
     lastSendError = err.message;

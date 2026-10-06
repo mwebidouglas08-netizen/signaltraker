@@ -118,14 +118,12 @@ single every-minute job above.
 
 - **Signals/alerts delivered**: by cron-job.org (either setup) or the GitHub
   workflow — accurate, with real Nairobi times. ✅
-- **Expiry notice + channel delete, fully unattended**: ONLY the **GitHub
-  Actions workflow** (it remembers message IDs between runs) and the app's
-  **test buttons** (each test expires the previous test's signal). Plain
-  cron-job.org bodies are static text and cannot name the previous message,
-  so on their own they never delete — old messages wait until one of the
-  above paths, or the open app's 30-second History sweep, handles them.
-- **Open app**: the History sweep posts expiry notices and deletes expired
-  deliveries from channel + app automatically.
+- **Expiry notice + channel delete, fully unattended**: the server remembers
+  the last signal it sent per channel (warm instance) and, on the next
+  signal tick, posts the expiry notice + deletes it — plain cron-job.org
+  bodies self-clean with zero extra setup. After a cold start the **GitHub
+  Actions workflow** (message-ID chaining), the app's **test buttons**, or
+  the open app's **30-second sweep** cover the gap instead.
 
 ---
 

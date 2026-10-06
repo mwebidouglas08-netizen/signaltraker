@@ -706,7 +706,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
               <p>✅ <b className="text-emerald-300">GitHub Actions workflow</b> (repo Secrets set) — chains every signal unattended, 24/7.</p>
               <p>✅ <b className="text-emerald-300">These test buttons</b> — each test expires the previous test's signal.</p>
               <p>✅ <b className="text-emerald-300">Open app</b> — the History sweep expires + deletes anything delivered, every 30s.</p>
-              <p>⚠️ <b className="text-amber-300">Plain cron-job.org bodies alone</b> deliver accurate alerts + signals but cannot name the previous message to delete (static text) — old channel messages stay until one of the three paths above runs.</p>
+              <p>⚠️ <b className="text-amber-300">Plain cron-job.org bodies</b> self-clean while the server instance stays warm (it remembers its last signal per channel and expires it on the next signal tick); after cold starts the GitHub workflow, test buttons, or the open app's sweep cover the gap.</p>
             </div>
 
             <div className="bg-slate-950/70 border border-sky-900/40 rounded-lg p-2.5 text-[10px] text-slate-400 space-y-1">
