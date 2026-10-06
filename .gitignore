@@ -8,3 +8,6 @@ coverage/
 !.env.example
 
 .ai-tracker.json
+
+# Local cron-chain state (GitHub Actions cache file, never commit)
+.cron-chain.json

@@ -1,8 +1,14 @@
 name: Auto-Broadcast Signal Trigger
 
-# Backup scheduler: keeps Telegram signals sending even when your browser is
-# closed. The primary/recommended scheduler is cron-job.org (see SETUP.md),
-# this workflow is a free fallback that runs from GitHub's servers.
+# FULL-AUTO scheduler with expiry cleanup: runs every minute, asks the server
+# which clock phase it is (signal / alert / waiting), and chains the previous
+# server signal's message ID so each cycle posts the expiry notice and deletes
+# the expired message — fully unattended, 24/7, alert always before signal.
+#
+# This is the only unattended path that can delete old messages (it remembers
+# message IDs between runs via the actions/cache below). Plain cron-job.org
+# bodies cannot chain IDs, so cron-job.org delivers accurate signals+alerts
+# while old-message cleanup there happens via the app's test-cycle chaining.
 #
 # SETUP (one-time):
 # 1. Deploy the app to Vercel first and note its URL, e.g.
@@ -14,26 +20,39 @@ name: Auto-Broadcast Signal Trigger
 #    Name:  CHAT_ID     Value: <channel id, e.g. -1001234567890 or @channel>
 #    Optional — must match Vercel env CRON_SECRET if you set one:
 #    Name:  CRON_SECRET Value: <same random string as in Vercel>
-# 4. Commit this file. Go to the "Actions" tab and confirm the workflow is enabled.
-# 5. Use "Run workflow" (workflow_dispatch) once to send a test signal.
-#
-# How it works:
-# - Every 2 minutes GitHub POSTs JSON {botToken, chatId, type:"signal"} to
-#   /api/cron/auto-broadcast. The server is stateless: everything it needs
-#   travels in the request body, so no database is required.
-# - Alternates alert/signal by minute parity so the channel gets the same
-#   1-minute warning → signal rhythm as the cron-job.org 2-job setup.
+# 4. Optional cadence (minutes per cycle, default 15):
+#    Name:  INTERVAL_MINUTES Value: 15
+#    (The server embeds this in every message as the accurate next-signal time
+#    in Kenyan EAT time.)
+# 5. Commit this file. Go to the "Actions" tab and confirm the workflow is enabled.
+# 6. Use "Run workflow" (workflow_dispatch) once to verify end-to-end.
 
 on:
   schedule:
-    - cron: "*/2 * * * *"
+    # Every minute — the server's clock-phase logic decides whether this tick
+    # sends a signal, an alert, or nothing (waiting returns HTTP 200).
+    - cron: "* * * * *"
   workflow_dispatch: {}
+
+concurrency:
+  # Never run two ticks at once (prevents double sends on backlog catch-up).
+  group: auto-broadcast-cycle
+  cancel-in-progress: false
 
 jobs:
   trigger-broadcast:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping auto-broadcast endpoint (POST with JSON body)
+      - name: Restore previous signal ID (for expiry chaining)
+        id: chain-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .cron-chain.json
+          key: cron-chain-main
+          restore-keys: cron-chain-
+
+      - name: Ping cycle endpoint (phase decided by server clock)
+        id: ping
         run: |
           if [ -z "${{ secrets.APP_URL }}" ]; then
             echo "❌ APP_URL secret is not set. Go to repo Settings → Secrets and variables → Actions and add APP_URL with your deployed app's URL."
@@ -54,22 +73,29 @@ jobs:
             AUTH_HEADER="X-No-Auth: true"
           fi
 
-          # Alternate phase by minute: even minute = signal, odd minute = alert.
-          # (Any deterministic alternation works — server defaults missing type to signal.)
-          MINUTE=$(date -u +%M)
-          if [ $((10#$MINUTE % 2)) -eq 0 ]; then
-            MSG_TYPE="signal"
+          INTERVAL="${{ secrets.INTERVAL_MINUTES }}"
+          if ! [[ "$INTERVAL" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then INTERVAL="15"; fi
+
+          # Chain the previous cycle's server signal (if any) so this tick
+          # posts its expiry notice and deletes it before sending anything new.
+          PRIOR=""
+          if [ -f .cron-chain.json ]; then
+            PRIOR=$(jq -r '.lastSignalId // empty' .cron-chain.json 2>/dev/null || true)
+          fi
+          if [ -n "$PRIOR" ]; then
+            CHAIN="\"deletePriorMessageIds\": [$PRIOR], \"sendExpiryNotice\": true,"
           else
-            MSG_TYPE="alert"
+            CHAIN=""
           fi
 
           BODY=$(jq -n \
             --arg bt "${{ secrets.BOT_TOKEN }}" \
             --arg ci "${{ secrets.CHAT_ID }}" \
-            --arg ty "$MSG_TYPE" \
-            '{botToken:$bt, chatId:$ci, type:$ty, siteName:"kicktrade", promoUrl:"http://kicktrade.site", botName:"USE KICKTRADE BOT", botSignature:"kicktrade Over/Under Bot", hashtags:"#TradingSignal #kicktrade #Signals", activeContracts:["UNDER 7","UNDER 8","OVER 2","OVER 3"]}')
+            --argjson iv "$INTERVAL" \
+            --argjson chain "{ $CHAIN \"x\": 1 }" \
+            '{botToken:$bt, chatId:$ci, mode:"cycle", intervalMinutes:$iv, siteName:"kicktrade", promoUrl:"http://kicktrade.site", botName:"USE KICKTRADE BOT", botSignature:"kicktrade Over/Under Bot", hashtags:"#TradingSignal #kicktrade #Signals", activeContracts:["UNDER 7","UNDER 8","OVER 2","OVER 3"]} + ($chain | del(.x))')
 
-          echo "Pinging ${{ secrets.APP_URL }}/api/cron/auto-broadcast (type=$MSG_TYPE) ..."
+          echo "Pinging ${{ secrets.APP_URL }}/api/cron/auto-broadcast (mode=cycle, interval=${INTERVAL}m) ..."
 
           HTTP_STATUS=$(curl -s -o response.txt -w "%{http_code}" \
             -X POST \
@@ -87,4 +113,37 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Cron trigger completed successfully."
+          PHASE=$(jq -r '.phase // "unknown"' response.txt)
+          echo "Phase: $PHASE"
+          echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
+
+          # Remember a freshly sent SIGNAL for the next tick's expiry chaining.
+          # (Alerts don't become priors; waiting ticks leave the cache alone.)
+          if [ "$PHASE" = "signal" ]; then
+            MID=$(jq -r '.messageId // empty' response.txt)
+            if [ -n "$MID" ]; then
+              jq -n --argjson id "$MID" '{lastSignalId: $id}' > .cron-chain.json
+              echo "Cached signal id $MID for next-tick expiry."
+            fi
+          elif [ "$PHASE" = "both" ]; then
+            MID=$(jq -r '.messageId // empty' response.txt)
+            if [ -n "$MID" ]; then
+              jq -n --argjson id "$MID" '{lastSignalId: $id}' > .cron-chain.json
+            fi
+          else
+            # Alert tick: if it cleaned the prior, drop the cache; otherwise keep it.
+            CLEANED=$(jq -r '.cleanup.deleted // [] | length' response.txt 2>/dev/null || echo 0)
+            if [ "$CLEANED" != "0" ]; then
+              rm -f .cron-chain.json
+              echo "Prior signal expired and deleted; cache cleared."
+            fi
+          fi
+
+          echo "✅ Cycle tick completed successfully."
+
+      - name: Save signal ID for next tick
+        if: always() && hashFiles('.cron-chain.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .cron-chain.json
+          key: cron-chain-main-${{ github.run_id }}

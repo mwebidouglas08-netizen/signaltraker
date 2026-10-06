@@ -60,55 +60,59 @@ Common Telegram errors:
 ## Step 3 — Enable server broadcasting + set up cron-job.org (required once)
 
 1. In the app → **Settings → Server-Side Auto-Broadcast** → set interval
-   (e.g. every 2 min) → **Enable Server-Side Broadcasting**.
-2. Click **Show Setup Values**. You get 3 things:
-   - **Cron URL** (same for both jobs):
-     `https://your-app.vercel.app/api/cron/auto-broadcast`
-   - **Cron Job 1 body** (`{"type":"alert",...}`)
-   - **Cron Job 2 body** (`{"type":"signal",...}`)
-3. Go to [cron-job.org](https://cron-job.org) → free account → **Create cronjob** twice:
-
-   **Cron Job 1 — Alert (fires first)**
-   - Title: `Signal Alert`
+   (e.g. 15 minutes — every message states Nairobi EAT times computed from it)
+   → **Enable Server-Side Broadcasting**.
+2. Click **Show Setup Values**. You get 2 things:
+   - **Cron URL**: `https://your-app.vercel.app/api/cron/auto-broadcast`
+   - **Cycle body** (`{"mode":"cycle",...}` — one body for the one job)
+3. Go to [cron-job.org](https://cron-job.org) → free account → **Create cronjob** once:
+   - Title: `Signal Cycle`
    - URL: `<cronUrl>` from step 2
-   - Schedule: your interval (e.g. every 2 minutes)
+   - Schedule: **every 1 minute**
    - Request method: **POST**
    - Headers: `Content-Type: application/json`
-     (+ `Authorization: Bearer <CRON_SECRET>` if you set one in Vercel)
-   - Body: paste the **alertPayload** exactly (use the Copy button — hand-typing
+     (+ `Authorization: Bearer <CRON_SECRET>` only if the app's banner says
+     your server requires it)
+   - Body: paste the **cycle body** exactly (use the Copy button — hand-typing
      risks truncating the bot token)
-   - Save. Note the time you saved it.
+   - Save.
 
-   **Before creating the jobs**, in the app click
-   **▶ Test-send this exact signal now**. ✅ = your copied URL + body are
-   proven correct end-to-end (same POST cron-job.org will send). ❌ = fix the
-   shown error, then Stop + Enable again for fresh bodies — never paste
-   failing values into cron-job.org.
+   **Before creating the job**, in the app click
+   **▶ Simulate this minute's tick**. It runs the exact clock logic cron-job.org
+   will run and tells you the phase plus the next event in Kenyan time
+   (e.g. `Next: alert at 14:34 EAT`). Use **▶ Send alert now** /
+   **▶ Send signal now** for immediate demos. ✅ = proven end-to-end.
+   ❌ = fix the shown error, then Stop + Enable again — never paste failing
+   values into cron-job.org.
 
-   **Cron Job 2 — Signal (fires 1 min after alert)**
-   - Same as above, but Body = **signalPayload**.
-   - Create/save it **exactly 1 minute after Job 1** so the two jobs stay
-     offset by 1 minute forever (alert → 1 min later → signal, repeating).
+   (No-body alternative: use the **GET-mode URL** with Method GET and an empty
+   body — same cycle, nothing to mistype.)
 
-4. In cron-job.org → History/Logs confirm both jobs return HTTP 200 with
-   `{"success":true,...}`.
+4. In cron-job.org → History/Logs confirm HTTP 200 with
+   `{"success":true,...}`. Mid-cycle ticks return
+   `{"success":true,"phase":"waiting",...}` — also 200, nothing due that minute.
 
-That's it — signals now send 24/7 even while you are logged out.
+That's it — the alert always fires first (last minute of each cycle block),
+the signal follows exactly 1 minute later (first minute of the next block),
+every message states its real Nairobi time, and each expired signal gets its
+expiry notice + auto-delete on the following cycle. 24/7, logged out or not.
 
-> GET fallback: the endpoint also accepts GET with
-> `?botToken=...&chatId=...&type=signal` query params, so a job accidentally
-> left on GET still works. POST with JSON body is the supported mode.
+> Old two-body payloads (`type: alert/signal`) still work for existing jobs,
+> but re-do this step to move to the single-job cycle — order is then
+> mathematically guaranteed instead of depending on save-time offsets.
 
 ---
 
-## Optional — GitHub Actions fallback scheduler
+## Optional — GitHub Actions full-auto scheduler (with expiry cleanup)
 
-If you prefer not to rely on cron-job.org, the repo includes
-`.github/workflows/auto-broadcast-cron.yml` (every 2 min, correct POST with
-JSON body). To use it, add repo Secrets `APP_URL`, `BOT_TOKEN`, `CHAT_ID`
-(and `CRON_SECRET` if set in Vercel), then enable the workflow in the
-Actions tab. You can run **both** schedulers, but normally one is enough —
-running both at the same interval doubles the messages.
+The repo includes `.github/workflows/auto-broadcast-cron.yml`: every minute it
+pings the cycle endpoint and **chains message IDs through a cache**, so each
+cycle posts the previous signal's expiry notice and deletes it — the only
+fully unattended path with complete cleanup. To use it, add repo Secrets
+`APP_URL`, `BOT_TOKEN`, `CHAT_ID` (plus `CRON_SECRET` if set in Vercel, and
+optional `INTERVAL_MINUTES`, default 15), then enable the workflow in the
+Actions tab. Run **either** this **or** cron-job.org, not both at once —
+running both doubles every message (and each would try to expire the other's).
 
 ---
 

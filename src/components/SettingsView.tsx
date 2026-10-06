@@ -44,6 +44,7 @@ interface CronSetup {
   cronUrl: string;
   alertPayload: string;
   signalPayload: string;
+  cyclePayload?: string;
   intervalMinutes: number;
   embeddedChatId?: string;
   embeddedChatTitle?: string;
@@ -206,6 +207,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
         cronUrl: data.cronUrl,
         alertPayload: data.alertPayload,
         signalPayload: data.signalPayload,
+        cyclePayload: data.cyclePayload || undefined,
         intervalMinutes: data.intervalMinutes,
         embeddedChatId: data.embeddedChatId,
         embeddedChatTitle: data.embeddedChatTitle,
@@ -234,6 +236,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
       localStorage.setItem("server_broadcast_cron_url", data.cronUrl);
       localStorage.setItem("server_broadcast_alert_payload", data.alertPayload);
       localStorage.setItem("server_broadcast_signal_payload", data.signalPayload);
+      if (data.cyclePayload) localStorage.setItem("server_broadcast_cycle_payload", data.cyclePayload);
       // Persisted for the app's expiry sweep (fallback window) — the payloads
       // themselves carry the authoritative intervalMinutes per request.
       localStorage.setItem("server_broadcast_interval", String(data.intervalMinutes ?? intervalMinutes));
@@ -259,6 +262,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
       localStorage.removeItem("server_broadcast_cron_url");
       localStorage.removeItem("server_broadcast_alert_payload");
       localStorage.removeItem("server_broadcast_signal_payload");
+      localStorage.removeItem("server_broadcast_cycle_payload");
       localStorage.removeItem("server_broadcast_cron_payload");
       localStorage.removeItem("server_broadcast_interval");
       localStorage.removeItem("server_broadcast_last_signal_id");
@@ -270,25 +274,34 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
     }
   };
 
-  // ── Test the EXACT saved payload against the cron endpoint ─────────────────
-  // Same POST cron-job.org will perform, PLUS full-cycle chaining: the
+  // ── Test the EXACT saved values against the cron endpoint ──────────────────
+  // Same request cron-job.org will perform, PLUS full-cycle chaining: the
   // previous test's server signal (if any) is passed as deletePriorMessageIds
   // with sendExpiryNotice, so each test expires the previous signal exactly
-  // like the live cycle does. The new delivery is recorded into History so
-  // the app's expiry sweep manages it too.
-  const handleCronTest = async (which: "alert" | "signal") => {
+  // like the live cycle does. Deliveries are recorded into History so the
+  // app's expiry sweep manages them too.
+  // which: legacy "alert"|"signal" bodies, "cycle" tick, or forced sends.
+  const handleCronTest = async (which: "alert" | "signal" | "cycle" | "force-alert" | "force-signal") => {
     if (!cronSetup) return;
     setCronTestLoading(true);
     setCronTestResult(null);
     setServerError("");
     try {
-      const raw = which === "alert" ? cronSetup.alertPayload : cronSetup.signalPayload;
+      const force = which === "force-alert" ? "alert" : which === "force-signal" ? "signal" : null;
+      const useCycleBody = which === "cycle" || force !== null;
+      const raw = useCycleBody
+        ? cronSetup.cyclePayload || ""
+        : which === "alert" ? cronSetup.alertPayload : cronSetup.signalPayload;
+      if (!raw) {
+        throw new Error("No single-job body saved yet. Click Stop then Enable again to generate it.");
+      }
       let bodyObj: any;
       try {
         bodyObj = JSON.parse(raw);
       } catch {
         throw new Error("Saved payload is corrupt JSON. Click Stop then Enable again to regenerate it.");
       }
+      if (force) bodyObj = { ...bodyObj, force };
       const priorId = localStorage.getItem("server_broadcast_last_signal_id");
       if (priorId && /^\d+$/.test(priorId)) {
         bodyObj = { ...bodyObj, deletePriorMessageIds: [parseInt(priorId, 10)], sendExpiryNotice: true };
@@ -303,24 +316,38 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
       if (!res.ok || (data as any).success === false) {
         throw new Error((data as any).error || (data as any).hint || `Test failed (HTTP ${res.status}).`);
       }
+      const phase = (data as any).phase || which;
+      const sentType: "alert" | "signal" | null =
+        (data as any).sent === false ? null
+        : force ? (force as "alert" | "signal")
+        : (data as any).type === "alert" ? "alert"
+        : (data as any).type === "signal" ? "signal"
+        : (data as any).alertMessageId ? "signal" : null;
       const cleanup = (data as any).cleanup;
       const cleanupNote = cleanup && (cleanup.noticeSent || (cleanup.deleted || []).length > 0)
         ? ` Prior expired signal cleaned: notice=${cleanup.noticeSent ? "sent" : "skipped"}, deleted=[${(cleanup.deleted || []).join(",") || "none"}].`
         : "";
-      setCronTestResult(`✅ ${which} test delivered to "${(data as any).chatTitle || (data as any).chatIdUsed || "channel"}" (${(data as any).chatIdUsed || "id unknown"}, messageId ${(data as any).messageId}).${cleanupNote} Your copied values are correct — now paste them into cron-job.org.`);
-      // Chain: this delivery becomes the "prior" for the next cycle, and any
-      // consumed prior is cleared (the request above already expired it).
-      if (which === "signal" && (data as any).messageId) {
+      const nextNote = (data as any).nextEvent
+        ? ` Next: ${(data as any).nextEvent} at ${(data as any).nextEventClock || (data as any).nextEventAt || "?"}.`
+        : "";
+      if (sentType) {
+        setCronTestResult(`✅ ${which} delivered "${sentType}" to "${(data as any).chatTitle || (data as any).chatIdUsed || "channel"}" (${(data as any).chatIdUsed || "id unknown"}, messageId ${(data as any).messageId}).${cleanupNote}${nextNote}`);
+      } else {
+        setCronTestResult(`✅ ${which} tick accepted (phase: ${phase} — nothing due this minute).${nextNote} Your values are correct — cron-job.org will fire on schedule.`);
+      }
+      // Chain: a sent signal becomes the "prior" for the next cycle; an alert
+      // consumes the prior (it just expired it).
+      if (sentType === "signal" && (data as any).messageId) {
         localStorage.setItem("server_broadcast_last_signal_id", String((data as any).messageId));
-      } else if (which === "alert") {
+      } else if (sentType === "alert") {
         localStorage.removeItem("server_broadcast_last_signal_id");
       }
-      if (onServerSignalSent && (data as any).messageId) {
+      if (onServerSignalSent && sentType && (data as any).messageId) {
         try {
           const insp = inspectPayload(raw);
           const siteCfg = getSiteConfigLocal();
           onServerSignalSent({
-            type: which,
+            type: sentType,
             messageId: String((data as any).messageId),
             chatId: (data as any).chatIdUsed || insp.chatId,
             chatTitle: (data as any).chatTitle || "",
@@ -343,11 +370,13 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
     const savedUrl = localStorage.getItem("server_broadcast_cron_url");
     const savedAlert = localStorage.getItem("server_broadcast_alert_payload");
     const savedSignal = localStorage.getItem("server_broadcast_signal_payload");
+    const savedCycle = localStorage.getItem("server_broadcast_cycle_payload");
     if (savedUrl && savedAlert && savedSignal && localStorage.getItem("server_broadcast_enabled") === "true") {
       setCronSetup({
         cronUrl: savedUrl,
         alertPayload: savedAlert,
         signalPayload: savedSignal,
+        cyclePayload: savedCycle || undefined,
         intervalMinutes,
       });
     }
@@ -456,26 +485,26 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
           const chatMatches =
             !!payloadChat && !!config.chatId && payloadChat.trim() === config.chatId.trim();
           const isStale = !tokenMatches || !chatMatches;
-          const alertGetUrl = buildGetUrl(cronSetup.cronUrl, cronSetup.alertPayload);
-          const signalGetUrl = buildGetUrl(cronSetup.cronUrl, cronSetup.signalPayload);
+          const cycleGetUrl = cronSetup.cyclePayload ? buildGetUrl(cronSetup.cronUrl, cronSetup.cyclePayload) : null;
           return (
           <div className="bg-slate-900/60 border border-emerald-900/30 rounded-xl p-4 space-y-4">
             <div className="flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <span className="text-xs font-bold text-emerald-300">Set up 2 cron jobs — takes 3 minutes, works forever</span>
+              <span className="text-xs font-bold text-emerald-300">Set up 1 cron job — takes 2 minutes, works forever</span>
             </div>
 
             <div className="bg-sky-950/30 border border-sky-900/30 rounded-lg p-2.5 flex items-start gap-1.5">
               <Info className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
               <p className="text-[10.5px] text-sky-200">
-                Go to <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="underline font-bold">cron-job.org</a> → free account → create <b>2 separate cron jobs</b> below. Same URL, same interval — different bodies, 1 minute apart. Alert always fires 1 min before signal, at any interval.
+                Go to <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="underline font-bold">cron-job.org</a> → free account → create <b>ONE cron job</b> below running <b>every 1 minute</b>.
+                The server reads the clock on every tick and sends the <b>alert first, then the signal exactly 1 minute later</b> — the order is guaranteed by time itself, nothing to offset by hand.
               </p>
             </div>
 
             {/* ── Server auth requirement (read live from the deployed server) ── */}
             {authRequired === true && (
               <div className="bg-amber-950/30 border border-amber-900/40 rounded-lg p-2.5 text-[10.5px] text-amber-200">
-                <b>🔐 Your server requires an auth header.</b> In <b>both</b> cron-job.org jobs add header{" "}
+                <b>🔐 Your server requires an auth header.</b> In the cron job add header{" "}
                 <code className="font-mono bg-slate-950 px-1 rounded">Authorization: Bearer (your CRON_SECRET value from Vercel)</code>.
                 Without it every run fails with HTTP 401 — even with a perfect URL and body.
               </div>
@@ -512,7 +541,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
             </div>
 
             <div className="space-y-1.5">
-              <p className="text-[10.5px] font-bold text-slate-300">Both cron jobs — same URL (exact copy):</p>
+              <p className="text-[10.5px] font-bold text-slate-300">The cron job — URL (exact copy):</p>
               <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2">
                 <code className="text-emerald-300 text-[10px] break-all flex-1">{cronSetup.cronUrl}</code>
                 <CopyButton text={cronSetup.cronUrl} />
@@ -524,64 +553,53 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
               )}
             </div>
 
-            {/* ── Fallback: GET-mode URLs (no body needed) ── */}
+            {/* ── Fallback: GET-mode URL (no body needed) ── */}
             <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-3 space-y-2">
               <p className="text-[10.5px] font-bold text-slate-200">🔗 Alternative: GET-mode (if POST keeps failing)</p>
               <p className="text-[10px] text-slate-400">
-                Same data, encoded in the URL — create the 2 jobs with <b className="text-slate-200">Method: GET</b>, paste one URL per job, leave the body empty.
+                Same data, encoded in the URL — create the job with <b className="text-slate-200">Method: GET</b>, paste this URL, leave the body empty.
               </p>
-              {alertGetUrl && (
-                <div className="space-y-1">
-                  <p className="text-[10px] font-bold text-amber-300">Job 1 — alert URL:</p>
-                  <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
-                    <code className="text-amber-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{alertGetUrl}</code>
-                    <CopyButton text={alertGetUrl} />
-                  </div>
+              {cycleGetUrl && (
+                <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
+                  <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cycleGetUrl}</code>
+                  <CopyButton text={cycleGetUrl} />
                 </div>
               )}
-              {signalGetUrl && (
-                <div className="space-y-1">
-                  <p className="text-[10px] font-bold text-emerald-300">Job 2 — signal URL:</p>
-                  <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
-                    <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{signalGetUrl}</code>
-                    <CopyButton text={signalGetUrl} />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 space-y-2">
-              <p className="text-[11px] font-bold text-amber-300">🔔 Cron Job 1 — Alert (fires first)</p>
-              <p className="text-[10px] text-slate-400">Schedule: your interval (e.g. every 2 min) · Method: POST · Request body: Custom · Content-Type: application/json · Body = below EXACTLY (must contain "type":"alert")</p>
-              <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
-                <code className="text-amber-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.alertPayload}</code>
-                <CopyButton text={cronSetup.alertPayload} />
-              </div>
-              <button
-                type="button"
-                onClick={() => handleCronTest("alert")}
-                disabled={cronTestLoading}
-                className="px-3 py-1.5 text-[10px] font-bold bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
-              >
-                {cronTestLoading ? "Testing..." : "▶ Test-send this exact alert now"}
-              </button>
             </div>
 
             <div className="bg-emerald-950/20 border border-emerald-900/30 rounded-xl p-3 space-y-2">
-              <p className="text-[11px] font-bold text-emerald-300">📈 Cron Job 2 — Signal (fires 1 min after alert)</p>
-              <p className="text-[10px] text-slate-400">Schedule: same interval, <b className="text-white">started/saved 1 minute after Cron Job 1</b> · Method: POST · Request body: Custom · Content-Type: application/json · Body = below EXACTLY (must contain "type":"signal")</p>
+              <p className="text-[11px] font-bold text-emerald-300">⏱️ The cron job — one body, every 1 minute</p>
+              <p className="text-[10px] text-slate-400">Schedule: <b className="text-white">every 1 minute</b> · Method: POST · Request body: Custom · Content-Type: application/json · Body = below EXACTLY (must contain "mode":"cycle")</p>
               <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
-                <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.signalPayload}</code>
-                <CopyButton text={cronSetup.signalPayload} />
+                <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.cyclePayload || "(re-enable to generate the single-job body)"}</code>
+                {cronSetup.cyclePayload && <CopyButton text={cronSetup.cyclePayload} />}
               </div>
-              <button
-                type="button"
-                onClick={() => handleCronTest("signal")}
-                disabled={cronTestLoading}
-                className="px-3 py-1.5 text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
-              >
-                {cronTestLoading ? "Testing..." : "▶ Test-send this exact signal now"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleCronTest("cycle")}
+                  disabled={cronTestLoading || !cronSetup.cyclePayload}
+                  className="px-3 py-1.5 text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
+                >
+                  {cronTestLoading ? "Testing..." : "▶ Simulate this minute's tick"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCronTest("force-alert")}
+                  disabled={cronTestLoading || !cronSetup.cyclePayload}
+                  className="px-3 py-1.5 text-[10px] font-bold bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
+                >
+                  {cronTestLoading ? "Sending..." : "▶ Send alert now"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCronTest("force-signal")}
+                  disabled={cronTestLoading || !cronSetup.cyclePayload}
+                  className="px-3 py-1.5 text-[10px] font-bold bg-sky-600 hover:bg-sky-500 disabled:bg-slate-700 text-white rounded-lg transition-all"
+                >
+                  {cronTestLoading ? "Sending..." : "▶ Send signal now"}
+                </button>
+              </div>
             </div>
 
             {cronTestResult && (
@@ -589,8 +607,8 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
             )}
 
             <p className="text-[10px] text-slate-500">
-              <b className="text-slate-300">Tip:</b> Create and save Cron Job 1 first. Wait exactly 1 minute, then create and save Cron Job 2. They will naturally be offset by 1 minute forever.
-              Each signal is valid for your interval, then the next cycle posts the expiry notice and auto-deletes it (set "Send every" to 15 minutes if you want the 15-minute wording).
+              <b className="text-slate-300">Tip:</b> One job, every 1 minute — the server sends the alert in the last minute of each {cronSetup.intervalMinutes}-minute block and the signal in the first minute of the next block, always 1 minute apart, always alert first.
+              Each signal states its exact Nairobi (EAT) next-signal time, then expires: the next cycle posts the expiry notice and auto-deletes it (set "Send every" to 15 minutes for the 15-minute wording).
             </p>
           </div>
           );
@@ -617,7 +635,8 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
                   const u = localStorage.getItem("server_broadcast_cron_url");
                   const a = localStorage.getItem("server_broadcast_alert_payload");
                   const s = localStorage.getItem("server_broadcast_signal_payload");
-                  if (u && a && s) setCronSetup({ cronUrl: u, alertPayload: a, signalPayload: s, intervalMinutes });
+                  const c = localStorage.getItem("server_broadcast_cycle_payload");
+                  if (u && a && s) setCronSetup({ cronUrl: u, alertPayload: a, signalPayload: s, cyclePayload: c || undefined, intervalMinutes });
                 }}
                 className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-all"
               >
