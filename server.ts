@@ -1281,6 +1281,9 @@ async function handleCronBroadcast(req: any, res: any) {
         nextEvent: "alert", nextEventAt: new Date(nextAlertAt).toISOString(),
         nextEventClock: formatEatClock(nextAlertAt),
         chatIdUsed: cleanChatId,
+        hint: "Nothing is due this minute — normal for most minutes of the cycle. " +
+          "If you ONLY ever see waiting/signal phases and never an alert, your cron job is almost certainly NOT running every 1 minute " +
+          "(e.g. every 15 minutes lands all pings in signal phases, so alerts never fire). Set the cron schedule to every 1 minute.",
       });
       return;
     }

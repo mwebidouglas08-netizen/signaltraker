@@ -202,6 +202,16 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Configuration failed.");
       }
+      // Stale-deployment alarm: only the current server code issues the
+      // single-job cycle body. Without it, cycle jobs degrade to signals-only
+      // (the exact "alert never sent" symptom) — never silently continue.
+      if (!data.cyclePayload) {
+        throw new Error(
+          "Your deployed server is STALE (it did not return the single-job cycle body). " +
+          "Wait for Vercel to finish deploying the latest commit, hard-refresh this page, and click Enable again. " +
+          "Do not set up cron jobs until this error is gone — old code sends signals only, never alerts."
+        );
+      }
 
       setCronSetup({
         cronUrl: data.cronUrl,
@@ -570,6 +580,10 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
             <div className="bg-emerald-950/20 border border-emerald-900/30 rounded-xl p-3 space-y-2">
               <p className="text-[11px] font-bold text-emerald-300">⏱️ The cron job — one body, every 1 minute</p>
               <p className="text-[10px] text-slate-400">Schedule: <b className="text-white">every 1 minute</b> · Method: POST · Request body: Custom · Content-Type: application/json · Body = below EXACTLY (must contain "mode":"cycle")</p>
+              <div className="bg-rose-950/30 border border-rose-900/40 rounded-lg p-2 text-[10.5px] text-rose-200">
+                ⛔ Schedule MUST be <b>every 1 minute</b>. With this body on an <b>every-15-minutes</b> schedule every ping lands in a signal phase —
+                you get <b>signals only, zero alerts, forever</b>. That exact symptom means the schedule is wrong, not the body.
+              </div>
               <div className="flex items-start gap-2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2">
                 <code className="text-emerald-200 text-[9px] break-all flex-1 font-mono leading-relaxed">{cronSetup.cyclePayload || "(re-enable to generate the single-job body)"}</code>
                 {cronSetup.cyclePayload && <CopyButton text={cronSetup.cyclePayload} />}

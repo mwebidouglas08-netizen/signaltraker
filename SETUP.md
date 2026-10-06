@@ -147,6 +147,15 @@ Open its execution log and read the JSON body:
 - `localhost` in the cron URL → you Enabled from `npm run dev`. cron-job.org
   cannot reach your laptop. Enable from the LIVE Vercel URL instead.
 
+**Signals arrive but alerts never do:**
+This has exactly two causes, no others:
+1. The cron schedule is not **every 1 minute** (e.g. every 15 minutes lands
+   every ping in a signal phase — mathematically, alerts can never fire).
+   Fix the schedule to every 1 minute.
+2. Vercel is serving an older deployment (cycle bodies degrade to
+   signals-only there). The app refuses to Enable in that state — if Enable
+   shows the STALE warning, wait for the newest deployment and retry.
+
 **Signals send while the app is open but not via cron:**
 The in-browser scanner only runs while the tab is open. After logout only
 cron-job.org (or GitHub Actions) can trigger sends — confirm at least one
