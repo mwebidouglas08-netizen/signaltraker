@@ -1191,6 +1191,7 @@ async function handleCronBroadcast(req: any, res: any) {
           chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
           nextEvent: "alert", nextEventAt: new Date(nextAlertAt).toISOString(),
           nextEventClock: formatEatClock(nextAlertAt),
+          requiredSchedule: "every-1-minute",
           ...clockProof,
         });
         return;
@@ -1207,6 +1208,7 @@ async function handleCronBroadcast(req: any, res: any) {
           chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup: r.cleanup,
           nextEvent: "signal", nextEventAt: new Date(nextSignalAt).toISOString(),
           nextEventClock: formatEatClock(nextSignalAt),
+          requiredSchedule: "every-1-minute",
           ...clockProof,
         });
         return;
@@ -1216,6 +1218,7 @@ async function handleCronBroadcast(req: any, res: any) {
         nextEvent: "alert", nextEventAt: new Date(nextAlertAt).toISOString(),
         nextEventClock: formatEatClock(nextAlertAt),
         chatIdUsed: cleanChatId,
+        requiredSchedule: "every-1-minute",
         ...clockProof,
         hint: "Nothing is due this minute — normal for most minutes of the cycle. " +
           "If you ONLY ever see waiting/signal phases and never an alert, your cron job is almost certainly NOT running every 1 minute " +
