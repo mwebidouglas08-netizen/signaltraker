@@ -862,7 +862,7 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
 // cached in a module-level variable (best-effort, resets on cold start).
 // Build marker — bump when the cron protocol changes. The UI + diagnose page
 // show it so a stale Vercel deployment is provable instead of guessable.
-const BUILD_TAG = "2026-10-06/cycle-6";
+const BUILD_TAG = "2026-10-06/cycle-7";
 let lastSendTime: string | null = null;
 let totalSentThisSession = 0;
 let lastSendError: string | null = null;
@@ -877,6 +877,36 @@ const lastSignalMemory = new Map<string, MemEntry>();
 const MEMORY_CAP = 500;
 function memKey(token: string, chat: string): string {
   return `${token}:${chat}`;
+}
+
+// Per-chat cycle tracking (per warm instance): which interval block already
+// got its signal, which block an alert was already sent for, and when the
+// last cycle ping arrived. This is what makes ordering survive sparse cron
+// schedules: a ping arriving outside its ideal window still completes the
+// cycle as an ordered alert→signal pair instead of locking into one phase,
+// while per-minute pings keep exact 1-minute spacing (duplicates suppressed).
+interface BlockTrack { sig?: number; alertFor?: number }
+const blockTrack = new Map<string, BlockTrack>();
+const lastPingByChat = new Map<string, number>();
+const SPARSE_GAP_MS = 100000; // >100s since last ping ⇒ sparse schedule
+function trackFor(key: string): BlockTrack {
+  let t = blockTrack.get(key);
+  if (!t) {
+    t = {};
+    blockTrack.set(key, t);
+    if (blockTrack.size > MEMORY_CAP) {
+      const oldest = blockTrack.keys().next();
+      if (!oldest.done) blockTrack.delete(oldest.value);
+    }
+  }
+  return t;
+}
+function notePing(key: string, nowMs: number): void {
+  lastPingByChat.set(key, nowMs);
+  if (lastPingByChat.size > MEMORY_CAP) {
+    const oldest = lastPingByChat.keys().next();
+    if (!oldest.done) lastPingByChat.delete(oldest.value);
+  }
 }
 
 app.get("/api/autobroadcast/status", (_req, res) => {
@@ -1261,17 +1291,41 @@ async function handleCronBroadcast(req: any, res: any) {
         intervalMinutes: N,
       };
 
+      // Block-tracked dispatch state for this chat: which interval block already
+      // got its signal, which block an alert was already sent for, and ping
+      // liveness (sparse = gap >100s since the previous ping, any phase).
+      const trackKey = memKey(cleanToken, cleanChatId);
+      const track = trackFor(trackKey);
+      const prevPing = lastPingByChat.get(trackKey);
+      // Sparse = gap >100s since the previous ping. A brand-new chat over POST
+      // counts as sparse (its cadence is unproven — pair immediately rather
+      // than risk locking into one phase); over GET it stays strict so a
+      // pasted URL can never blast a pair by accident.
+      const sparse = prevPing === undefined ? req.method === "POST" : nowMs - prevPing > SPARSE_GAP_MS;
+      notePing(trackKey, nowMs);
+
       if (elapsed < 60000) {
-        // Cold-start / first-ever signal: no prior alert exists in-channel,
-        // so send the alert immediately first — every signal is then always
-        // preceded by an alert (best-effort; the signal sends regardless).
+        // SIGNAL window. Skip when this block was already served (duplicate
+        // suppression for backlog bursts / manual re-fires).
+        if (track.sig === blockStart) {
+          res.json({
+            success: true, phase: "signal", sent: false, suppressedDuplicate: true,
+            nextEvent: "alert", nextEventAt: new Date(nextAlertAt).toISOString(),
+            nextEventClock: formatEatClock(nextAlertAt),
+            requiredSchedule: "every-1-minute",
+            ...clockProof, chatIdUsed: cleanChatId,
+          });
+          return;
+        }
+        // Catch-up: no alert went out for this block's signal yet (cold start,
+        // missed alert window, or sparse schedule) — send it immediately first.
         let catchUpAlert: number | null = null;
         let catchUpFailed: string | null = null;
-        if (!lastSignalMemory.has(memKey(cleanToken, cleanChatId))) {
+        if (track.alertFor !== blockStart) {
           try {
             const ca = await sendOne("alert");
             if (ca.ok === false) catchUpFailed = ca.error;
-            else catchUpAlert = ca.messageId;
+            else { catchUpAlert = ca.messageId; track.alertFor = blockStart; }
           } catch (err: any) {
             catchUpFailed = err.message;
           }
@@ -1281,6 +1335,7 @@ async function handleCronBroadcast(req: any, res: any) {
           sendError(400, r.error, { advice: r.advice, chatIdUsed: r.chatIdUsed });
           return;
         }
+        track.sig = blockStart;
         const cleanup = await runPostSendCleanup(deletePrior, wantExpiryNotice, memFor(r.messageId, nowMs));
         res.json({
           success: true, phase: "signal", sent: true, type: "signal",
@@ -1295,16 +1350,81 @@ async function handleCronBroadcast(req: any, res: any) {
         return;
       }
       if (elapsed >= blockMs - 60000) {
+        // ALERT window for the NEXT block's signal. Skip when already served
+        // (duplicate suppression). On sparse schedules (gap since previous
+        // ping >100s) the matching signal tick will never come, so deliver
+        // its signal immediately as an ordered pair instead of locking into
+        // alerts-only forever.
+        const target = blockStart + blockMs;
+        if (track.alertFor === target) {
+          res.json({
+            success: true, phase: "alert", sent: false, suppressedDuplicate: true,
+            nextEvent: "signal", nextEventAt: new Date(nextSignalAt).toISOString(),
+            nextEventClock: formatEatClock(nextSignalAt),
+            requiredSchedule: "every-1-minute",
+            ...clockProof, chatIdUsed: cleanChatId,
+          });
+          return;
+        }
         const r = await sendOne("alert");
         if (r.ok === false) {
           sendError(400, r.error, { advice: r.advice, chatIdUsed: r.chatIdUsed });
           return;
         }
-        const cleanup = await runPostSendCleanup(deletePrior, wantExpiryNotice, null);
+        track.alertFor = target;
+        let pairedSignal: number | null = null;
+        let pairedError: string | null = null;
+        let cleanup = await runPostSendCleanup(deletePrior, wantExpiryNotice, null);
+        if (sparse) {
+          const rs = await sendOne("signal");
+          if (rs.ok === false) {
+            pairedError = rs.error;
+          } else {
+            const cleanup2 = await runPostSendCleanup([], false, memFor(rs.messageId, nowMs));
+            cleanup = {
+              noticeSent: cleanup.noticeSent || cleanup2.noticeSent,
+              deleted: [...cleanup.deleted, ...cleanup2.deleted],
+              deleteErrors: [...cleanup.deleteErrors, ...cleanup2.deleteErrors],
+            };
+            track.sig = target;
+            pairedSignal = rs.messageId;
+          }
+        }
         res.json({
           success: true, phase: "alert", sent: true, type: "alert",
           messageId: r.messageId, totalSent: totalSentThisSession,
           chatIdUsed: cleanChatId, chatTitle: r.chatTitle, cleanup,
+          pairedSignal, pairedError,
+          nextEvent: pairedSignal ? "alert" : "signal",
+          nextEventAt: new Date(pairedSignal ? target + blockMs - 60000 : nextSignalAt).toISOString(),
+          nextEventClock: formatEatClock(pairedSignal ? target + blockMs - 60000 : nextSignalAt),
+          requiredSchedule: "every-1-minute",
+          ...clockProof,
+        });
+        return;
+      }
+      // Mid-block: normally waiting. Exception — brand-new chat over POST with
+      // no history at all: deliver a full ordered pair immediately (instant
+      // proof-of-life for fresh setups/demos) instead of silence.
+      if (req.method === "POST" && track.sig === undefined && track.alertFor === undefined && !lastSignalMemory.has(trackKey)) {
+        const ra = await sendOne("alert");
+        if (ra.ok === false) {
+          sendError(400, ra.error, { advice: ra.advice, chatIdUsed: ra.chatIdUsed });
+          return;
+        }
+        track.alertFor = blockStart;
+        const rs = await sendOne("signal");
+        if (rs.ok === false) {
+          sendError(400, rs.error, { advice: rs.advice, chatIdUsed: rs.chatIdUsed, alertMessageId: ra.messageId });
+          return;
+        }
+        track.sig = blockStart;
+        const cleanup = await runPostSendCleanup(deletePrior, wantExpiryNotice, memFor(rs.messageId, nowMs));
+        res.json({
+          success: true, phase: "pair", sent: true, type: "signal",
+          alertMessageId: ra.messageId, messageId: rs.messageId,
+          totalSent: totalSentThisSession, chatIdUsed: cleanChatId,
+          chatTitle: rs.chatTitle, cleanup,
           nextEvent: "signal", nextEventAt: new Date(nextSignalAt).toISOString(),
           nextEventClock: formatEatClock(nextSignalAt),
           requiredSchedule: "every-1-minute",
@@ -1320,8 +1440,8 @@ async function handleCronBroadcast(req: any, res: any) {
         requiredSchedule: "every-1-minute",
         ...clockProof,
         hint: "Nothing is due this minute — normal for most minutes of the cycle. " +
-          "If you ONLY ever see waiting/signal phases and never an alert, your cron job is almost certainly NOT running every 1 minute " +
-          "(e.g. every 15 minutes lands all pings in signal phases, so alerts never fire). Set the cron schedule to every 1 minute.",
+          "For exact 1-minute alert→signal spacing the cron schedule must be every 1 minute; " +
+          "sparser schedules still deliver complete ordered pairs at window pings instead.",
       });
       return;
     }
