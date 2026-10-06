@@ -817,7 +817,7 @@ let lastSendError: string | null = null;
 app.post("/api/autobroadcast/configure", async (req, res) => {
   const body = normalizedBody(req);
   const parsed = parseCronConfig(body);
-  if (!parsed.ok) {
+  if (parsed.ok === false) {
     res.status(400).json({ error: parsed.error });
     return;
   }
@@ -879,6 +879,12 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
     host.includes("localhost") || host.startsWith("127.") || host.startsWith("192.168.");
   const protocol = isLocal ? "http" : "https";
   const cronUrl = `${protocol}://${host}/api/cron/auto-broadcast`;
+  const prodHost = vercelProd.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const hostWarning = isLocal
+    ? "You enabled from localhost — cron-job.org cannot reach localhost. Redeploy, open the LIVE app URL, and click Enable there so the cron URL is public."
+    : prodHost && host.toLowerCase() !== prodHost.toLowerCase()
+      ? `You enabled from ${host} but production is ${prodHost}. Update APP_URL or re-enable from https://${prodHost} — otherwise cron-job.org pings this non-production URL and fails.`
+      : null;
   const base = {
     botToken: cfg.botToken,
     chatId: cfg.chatId,
@@ -902,9 +908,7 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
     canonicalBotToken: cfg.botToken,
     canonicalChatId: cfg.chatId,
     tokenPrefix: cfg.botToken.slice(0, 6) + "...",
-    hostWarning: isLocal
-      ? "You enabled from localhost — cron-job.org cannot reach localhost. Redeploy, open the LIVE app URL, and click Enable there so the cron URL is public."
-      : null,
+    hostWarning,
   });
 });
 
@@ -943,7 +947,7 @@ app.post("/api/autobroadcast/disable", (_req, res) => {
 
 async function handleCronBroadcast(req: any, res: any) {
   const auth = checkCronAuth(req);
-  if (!auth.ok) {
+  if (auth.ok === false) {
     lastSendError = (auth as any).error;
     res.status(401).json({ success: false, error: (auth as any).error });
     return;
@@ -951,7 +955,7 @@ async function handleCronBroadcast(req: any, res: any) {
   // normalizedBody() also recovers JSON sent as text/plain (wrong Content-Type in cron-job.org).
   const source = normalizedBody(req);
   const parsed = parseCronConfig(source);
-  if (!parsed.ok) {
+  if (parsed.ok === false) {
     lastSendError = parsed.error;
     res.status(400).json({
       success: false,

@@ -403,7 +403,7 @@ app.post("/api/telegram/send", async (req, res) => {
     // Retry as plain text if HTML parse fails
     if (!data.ok && (data.description || "").toLowerCase().includes("parse")) {
       const plain = text.replace(/<[^>]*>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-      const fallback = { ...payload, text: plain };
+      const fallback: Record<string, any> = { ...payload, text: plain };
       delete fallback.parse_mode;
       data = await safeTelegramFetch(
         `https://api.telegram.org/bot${cleanToken}/sendMessage`,
@@ -640,7 +640,7 @@ function parseCronConfig(body: any): { ok: true; cfg: CronConfig } | { ok: false
 app.post("/api/autobroadcast/configure", async (req, res) => {
   const body = normalizedBody(req);
   const parsed = parseCronConfig(body);
-  if (!parsed.ok) {
+  if (parsed.ok === false) {
     res.status(400).json({ error: parsed.error });
     return;
   }
@@ -705,6 +705,16 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
     host.includes("localhost") || host.startsWith("127.") || host.startsWith("192.168.");
   const protocol = isLocal ? "http" : "https";
   const cronUrl = `${protocol}://${host}/api/cron/auto-broadcast`;
+  // Exact, safe deployment check: if APP_URL (production) is configured and
+  // differs from where Enable was clicked (e.g. a preview deployment URL that
+  // Vercel deletes, or localhost), say so explicitly — cron-job.org would ping
+  // a dead URL and report an HTTP error forever.
+  const prodHost = vercelProd.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const hostWarning = isLocal
+    ? "You enabled from localhost — cron-job.org cannot reach localhost. Redeploy, open the LIVE app URL, and click Enable there so the cron URL is public."
+    : prodHost && host.toLowerCase() !== prodHost.toLowerCase()
+      ? `You enabled from ${host} but production is ${prodHost}. Update APP_URL or re-enable from https://${prodHost} — otherwise cron-job.org pings this non-production URL and fails.`
+      : null;
 
   const base = {
     botToken: cfg.botToken,
@@ -737,9 +747,7 @@ app.post("/api/autobroadcast/configure", async (req, res) => {
     canonicalBotToken: cfg.botToken,
     canonicalChatId: cfg.chatId,
     tokenPrefix: cfg.botToken.slice(0, 6) + "...",
-    hostWarning: isLocal
-      ? "You enabled from localhost — cron-job.org cannot reach localhost. Redeploy, open the LIVE app URL, and click Enable there so the cron URL is public."
-      : null,
+    hostWarning,
   });
 });
 
@@ -843,7 +851,7 @@ function checkCronAuth(req: any): { ok: true } | { ok: false; error: string } {
 // body) returns a clear JSON error instead of an HTML 404.
 async function handleCronBroadcast(req: any, res: any) {
   const auth = checkCronAuth(req);
-  if (!auth.ok) {
+  if (auth.ok === false) {
     lastSendError = auth.error;
     res.status(401).json({ success: false, error: auth.error });
     return;
@@ -854,7 +862,7 @@ async function handleCronBroadcast(req: any, res: any) {
   // normalizedBody() also recovers JSON sent as text/plain (wrong Content-Type in cron-job.org).
   const source = normalizedBody(req);
   const parsed = parseCronConfig(source);
-  if (!parsed.ok) {
+  if (parsed.ok === false) {
     lastSendError = parsed.error;
     res.status(400).json({
       success: false,

@@ -349,7 +349,7 @@ export default function VolatilityScanner({
   const configRef = useRef(telegramConfig);
   useEffect(() => { configRef.current = telegramConfig; }, [telegramConfig]);
 
-  const scannerStateRef = useRef(scannerState);
+  const scannerStateRef = useRef<"SCANNING" | "ACTIVE_SIGNAL" | "COOLDOWN">(scannerState);
   useEffect(() => { scannerStateRef.current = scannerState; }, [scannerState]);
 
   const activeContractRef = useRef(activeContract);
@@ -1040,13 +1040,16 @@ export default function VolatilityScanner({
 
     generatingSignalRef.current = true;
     setGeneratingSignal(true);
-    
+
     const logMsg = `⚙️ Formulating high-accuracy message parameters for ${targetMarket.name}...`;
     setAutoLog((prev) => [logMsg, ...prev.slice(0, 49)]);
 
     // If there is an active signal running when a new cycle is triggered,
     // end it gracefully first and send its feedback before overwriting!
-    if (scannerStateRef.current === "ACTIVE_SIGNAL" && activeContractRef.current) {
+    // NOTE: read via a fresh `as string` cast — the guard above narrows the
+    // ref to "SCANNING", so a direct === "ACTIVE_SIGNAL" check is flagged
+    // TS2367 (and is unreachable while the guard stands).
+    if ((scannerStateRef.current as string) === "ACTIVE_SIGNAL" && activeContractRef.current) {
       setAutoLog((prev) => [`⏰ Devolving prior active signal on ${activeContractRef.current?.symbol} to send final results feedback before overwrite...`, ...prev.slice(0, 49)]);
       await handleTriggerExpiryFeedbackBeforeOverwrite();
     }

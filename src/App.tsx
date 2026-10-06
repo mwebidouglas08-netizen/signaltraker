@@ -577,7 +577,7 @@ export default function App() {
         tp2: currentDraft?.tp2 || "",
         tp3: currentDraft?.tp3 || "",
         sl: currentDraft?.sl || "",
-        userNotes: currentDraft?.userNotes || "",
+        userNotes: "",
         formattedText: editableText,
         rationale: editableRationale,
         status: "ACTIVE",
