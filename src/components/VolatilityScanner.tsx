@@ -280,8 +280,7 @@ function windowText(totalSeconds: number): string {
   const r = Math.round(mins % 60);
   return r === 0 ? `${h} hour${h === 1 ? "" : "s"}` : `${h}h ${r}m`;
 }
-function appendTimingFooter(html: string, nextInSec: number | null, validSec = 300): string {
-  const now = Date.now();
+function appendTimingFooter(html: string, nextInSec: number | null, validSec = 300): string {  const now = Date.now();
   let out = html.replace(/\s+$/, "");
   out += `\n\n⏰ <b>Sent:</b> ${eatClock(now)}`;
   if (nextInSec !== null && nextInSec > 0) {
@@ -289,6 +288,15 @@ function appendTimingFooter(html: string, nextInSec: number | null, validSec = 3
   }
   out += `\n⌛ <b>Valid ~${windowText(validSec)}</b> — then it expires and auto-deletes`;
   return out;
+}
+// Escape config-derived values for Telegram HTML parse mode (plain-text
+// fallback still guarantees delivery, but escaped values keep formatting).
+function escHtml(s: string): string {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function tagSlug(s: string): string {
+  const slug = String(s ?? "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  return slug || "signal";
 }
 
 export default function VolatilityScanner({ 
@@ -628,16 +636,16 @@ export default function VolatilityScanner({
     const warningMsg = `📡 [Pre-Signal Alert] Sending upcoming trade warning alert to the Telegram channel...`;
     setAutoLog((prev) => [warningMsg, ...prev.slice(0, 49)]);
 
-    let alertText = `🚨 <b>ALERT TO ALL ${getSiteConfig().siteName.toUpperCase()} MEMBERS  🚨</b>\n\n`;
+    let alertText = `🚨 <b>ALERT TO ALL ${escHtml(getSiteConfig().siteName.toUpperCase())} MEMBERS  🚨</b>\n\n`;
     alertText += `⚠ In just a few minutes, a new signal will be sent!\n`;
     alertText += `📢 <b>Be ready and standby!</b>\n\n`;
-    alertText += `🖥 <b>Go to:</b> ${getSiteConfig().promoUrl}\n`;
-    alertText += `🤖 <b>Load your bot:</b> <code>${getSiteConfig().botName}</code>\n\n`;
+    alertText += `🖥 <b>Go to:</b> ${escHtml(getSiteConfig().promoUrl)}\n`;
+    alertText += `🤖 <b>Load your bot:</b> <code>${escHtml(getSiteConfig().botName)}</code>\n\n`;
     alertText += `✅ Make sure your settings are ready…\n`;
     alertText += `🚀 Let’s catch this trade together!\n\n`;
-    alertText += `#StayAlert #${getSiteConfig().siteName.replace(/\s+/g, '').toLowerCase()}signal 🔥📈 🔥 We either go home or go hard 💸\n`;
+    alertText += `#StayAlert #${tagSlug(getSiteConfig().siteName)}signal 🔥📈 🔥 We either go home or go hard 💸\n`;
     alertText += `No risk no Ferrari 🚀\n`;
-    alertText += `${getSiteConfig().promoUrl}`;
+    alertText += `${escHtml(getSiteConfig().promoUrl)}`;
 
     if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
       if (!configRef.current.botToken || !configRef.current.chatId) {
@@ -794,8 +802,8 @@ export default function VolatilityScanner({
       feeText += `💪 Losses are part of the game. Let's recover in the next high-probability cycle!\n`;
     }
     
-    feeText += `💻 <b>Link:</b> ${getSiteConfig().promoUrl}\n\n`;
-    feeText += `#${getSiteConfig().siteName.replace(/\s+/g, '').toLowerCase()}signal #${getSiteConfig().siteName.replace(/\s+/g, '')} #Deriv`;
+    feeText += `💻 <b>Link:</b> ${escHtml(getSiteConfig().promoUrl)}\n\n`;
+    feeText += `#${tagSlug(getSiteConfig().siteName)}signal #${tagSlug(getSiteConfig().siteName)} #Deriv`;
 
     return { text: feeText, isWin, winRate };
   };
@@ -870,12 +878,12 @@ export default function VolatilityScanner({
       const singleCombinedMessage = `${feedbackText}\n\n` +
         `⏰ <b>𝐍𝐄𝐗𝐓 𝐒𝐈𝐆𝐍𝐀𝐋 𝐀𝐋𝐄𝐑𝐓!</b> ⏰\n\n` +
         `Always remember poverty is the biggest enemy....🔥🫸🔥\n` +
-        `🔥 <b>${siteCfg.botName}</b> , we catch <b>${nextTimeFormatted}</b> for another powerful signal!\n` +
+        `🔥 <b>${escHtml(siteCfg.botName)}</b> , we catch <b>${nextTimeFormatted}</b> for another powerful signal!\n` +
         `(Over/under)\n\n` +
-        `💻 Make sure you're on ${siteCfg.promoUrl}\n` +
+        `💻 Make sure you're on ${escHtml(siteCfg.promoUrl)}\n` +
         `🤖 Bot ready ➕ Focused ➕ Active\n` +
         `💰 Let's trade and make that money together! 🤑📈\n\n` +
-        `#${siteCfg.siteName.replace(/\s+/g, "")} Moves #NextSignal Time 💸`;
+        `#${tagSlug(siteCfg.siteName)} Moves #NextSignal Time 💸`;
 
       if (autoBroadcastRef.current || broadcastFrequencyRef.current === "hourly") {
         try {
@@ -1059,11 +1067,11 @@ export default function VolatilityScanner({
     html += `📊 <b>Market Analysis (${m.ticks})</b>\n`;
     html += `━━━━━━━━━\n`;
     html += `🎯 <b>Entry Instructions:</b>\n\n`;
-    html += `<b>${siteCfg.botName}</b>\n`;
+    html += `<b>${escHtml(siteCfg.botName)}</b>\n`;
     html += `💹 <b>Trade:</b> ${m.action}\n`;
     html += `🔑 <b>Entry Digit:</b> <code>${m.entryDigit}</code>\n`;
     html += `⭐ <b>Confidence:</b> ${m.strength}%\n\n`;
-    html += `${siteCfg.promoUrl}\n\n`;
+    html += `${escHtml(siteCfg.promoUrl)}\n\n`;
     html += `📈 <b>Session Stats:</b>\n\n`;
     html += `⚠️ <b>Risk Management:</b>\n`;
     html += `• Stop after 4 consecutive wins\n• Max 5 runs per session\n• Use proper recovery if loss occurs\n\n`;
@@ -1074,7 +1082,7 @@ export default function VolatilityScanner({
       html += `⏳ <b>Next signal:</b> ${eatClock(sentNow + nextInSec * 1000)} (in ${windowText(nextInSec)})\n`;
     }
     html += `⌛ <b>Valid ~${windowText(300)}</b> — then it expires and auto-deletes\n\n`;
-    html += `🤖 Generated by ${siteCfg.botSignature}\n`;
+    html += `🤖 Generated by ${escHtml(siteCfg.botSignature)}\n`;
     html += siteCfg.hashtags;
 
     return html;

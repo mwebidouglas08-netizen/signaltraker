@@ -97,6 +97,12 @@ the signal follows exactly 1 minute later (first minute of the next block),
 every message states its real Nairobi time, and each expired signal gets its
 expiry notice + auto-delete on the following cycle. 24/7, logged out or not.
 
+Every signal message carries a tap-to-open button ("🚀 Open Signal in …")
+linked to your Promo URL — members tap it to open the site and configure the
+trade. It is generated from the payload's `promoUrl`, so changing Promo URL
+in the app → Stop + Enable again → re-paste; manual sends include it
+automatically from the saved site URL.
+
 > Old two-body payloads (`type: alert/signal`) still work for existing jobs,
 > but re-do this step to move to the single-job cycle — order is then
 > mathematically guaranteed instead of depending on save-time offsets.

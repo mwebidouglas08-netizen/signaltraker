@@ -329,9 +329,10 @@ export default function App() {
   }
 
   function buildLocalExpiryNotice(site: string, mins: number): string {
+    const safeSite = String(site ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const w = mins % 1 === 0 ? `${mins} minutes` : `${mins.toFixed(1)} minutes`;
     return (
-      `⌛ <b>${site} signal AI SIGNAL EXPIRED</b>\n\n` +
+      `⌛ <b>${safeSite} signal AI SIGNAL EXPIRED</b>\n\n` +
       `This signal has expired.\n` +
       `⏳ Next signal window: in ${w}\n\n` +
       `Wait for the next signal in the next ${w}.`
@@ -444,6 +445,18 @@ export default function App() {
     localStorage.setItem(LOCAL_STORAGE_KEY_SIGNALS, JSON.stringify(newSignals));
   };
 
+  // Promo URL for the tap-to-open trade button attached to every signal.
+  // Read live so a changed site URL applies to the next send without reloads.
+  const readPromoUrl = (): string => {
+    try {
+      const cfg = JSON.parse(localStorage.getItem("signal_site_config") || "{}");
+      const u = String(cfg.promoUrl || "").trim();
+      return u || "http://kicktrade.site";
+    } catch {
+      return "http://kicktrade.site";
+    }
+  };
+
   // Callback when Form Generates a Signal
   const handleSignalGenerated = (data: {
     assetClass: string;
@@ -545,6 +558,7 @@ export default function App() {
           botToken: config.botToken,
           chatId: config.chatId,
           text: draftData.formattedText,
+          promoUrl: readPromoUrl(),
         }),
       });
 
@@ -622,6 +636,7 @@ export default function App() {
           botToken: config.botToken,
           chatId: config.chatId,
           text: editableText,
+          promoUrl: readPromoUrl(),
         }),
       });
 
@@ -767,6 +782,7 @@ export default function App() {
           botToken: config.botToken,
           chatId: config.chatId,
           text: text,
+          promoUrl: readPromoUrl(),
         }),
       });
 
