@@ -205,7 +205,7 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
                 <li>
                   <strong className="text-slate-200">Add Bot as Channel Admin:</strong>
                   <div className="text-amber-300 font-semibold mt-1">
-                    ⚠️ Channel Settings → Admins → Add Admin → find your bot → enable "Post Messages".
+                    ⚠️ Channel Settings → Admins → Add Admin → find your bot → enable <b>BOTH</b> "Post Messages" <b>and</b> "Delete Messages" (delete right is what lets expired signals auto-remove).
                   </div>
                 </li>
                 <li>
@@ -429,7 +429,7 @@ export default function TelegramConfigPanel({ config, onChange }: Props) {
               <p className="text-slate-300">{errorMessage}</p>
               <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-400 mt-2">
                 <li>Copy your bot token exactly from <b>@BotFather</b> with no spaces.</li>
-                <li>Add your bot as <b>Admin</b> in the channel with <b>Post Messages</b> enabled.</li>
+                <li>Add your bot as <b>Admin</b> in the channel with <b>Post Messages</b> <b>and</b> <b>Delete Messages</b> enabled (both are required — deleting needs its own right).</li>
                 <li>Paste the Channel ID exactly as Telegram shows it (e.g. <code className="font-mono bg-slate-900 px-0.5 rounded">-1001234567890</code>).</li>
               </ul>
             </motion.div>

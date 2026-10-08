@@ -145,7 +145,7 @@ function buildTelegramErrorAdvice(data: any, cleanChatId: string): string {
     );
   }
   if (desc.includes("admin") || desc.includes("post") || desc.includes("not member") || desc.includes("forbidden")) {
-    return `Bot lacks permission. Go to Channel Settings → Admins → Add Admin → select your bot → enable "Post Messages".`;
+    return `Bot lacks permission. Go to Channel Settings → Admins → Add Admin → select your bot → enable "Post Messages" (and "Delete Messages" for auto-delete).`;
   }
   if (desc.includes("unauthorized") || desc.includes("token")) {
     return `Invalid Bot Token. Copy it exactly from @BotFather — it looks like 1234567890:ABCdef...`;
@@ -524,11 +524,26 @@ Use only Telegram HTML tags. Output ONLY JSON: {"signal":"...","rationale":"..."
 });
 
 // ─── Delete a sent Telegram message (used for auto-delete after N minutes) ────
+// Success semantics are strict on purpose: ONLY "message not found" counts as
+// already-cleaned. "Message can't be deleted" on a FRESH message means the
+// bot lacks the "Delete Messages" admin right — that must surface as a real
+// error (with the fix), never as a silent success. An optional `sentAt` (ISO
+// or ms) lets the server skip messages older than ~47h, which Telegram itself
+// refuses to delete — those count as cleaned without a doomed API call.
+const DELETE_TOO_OLD_MS = 47 * 3600 * 1000;
 app.post("/api/telegram/delete", async (req, res) => {
-  const { botToken, chatId, messageId } = req.body;
+  const { botToken, chatId, messageId, sentAt } = req.body;
   if (!botToken || !chatId || !messageId) {
     res.status(400).json({ error: "botToken, chatId, and messageId are required" });
     return;
+  }
+
+  if (sentAt !== undefined && sentAt !== null && sentAt !== "") {
+    const sentMs = typeof sentAt === "number" ? sentAt : new Date(sentAt).getTime();
+    if (Number.isFinite(sentMs) && Date.now() - sentMs > DELETE_TOO_OLD_MS) {
+      res.json({ success: true, alreadyGone: true, tooOld: true });
+      return;
+    }
   }
 
   const { cleanToken, cleanChatId } = sanitizeTelegramCredentials(botToken, chatId);
@@ -544,10 +559,23 @@ app.post("/api/telegram/delete", async (req, res) => {
     );
 
     if (!data.ok) {
-      // Telegram returns ok:false if message was already deleted or too old (>48h) — treat as success either way
       const desc = (data.description || "").toLowerCase();
-      const alreadyGone = desc.includes("message to delete not found") || desc.includes("message can't be deleted");
-      res.json({ success: alreadyGone, alreadyGone, error: data.description });
+      // Genuinely gone (or never existed) — cleaned.
+      if (desc.includes("message to delete not found") || desc.includes("message_id_invalid") || desc.includes("not found")) {
+        res.json({ success: true, alreadyGone: true });
+        return;
+      }
+      // Anything else (notably "message can't be deleted" on a fresh message)
+      // means the bot may NOT delete here — surface it with the exact fix.
+      res.json({
+        success: false,
+        alreadyGone: false,
+        error: data.description,
+        advice:
+          "Telegram refused the delete. Open the channel → Settings → Administrators → your bot " +
+          "→ enable BOTH 'Post Messages' AND 'Delete Messages', then retry. " +
+          "(If the message is older than ~2 days, Telegram itself forbids deletion.)",
+      });
       return;
     }
 
@@ -1231,13 +1259,14 @@ async function handleCronBroadcast(req: any, res: any) {
           cleanup.deleted.push(mid);
           return true;
         }
-        const desc = String(del.description || "");
-        // Already gone (or too old) counts as cleaned — not an error.
-        if (/not found|can't be deleted/i.test(desc)) {
+        const desc = String(del.description || "").toLowerCase();
+        // Only genuinely-gone counts as cleaned. "Can't be deleted" on a live
+        // message means missing admin rights — a real, surfaced error.
+        if (desc.includes("message to delete not found") || desc.includes("message_id_invalid") || desc.includes("not found")) {
           cleanup.deleted.push(mid);
           return true;
         }
-        cleanup.deleteErrors.push(`delete ${mid}: ${desc || "failed"}`);
+        cleanup.deleteErrors.push(`delete ${mid}: ${del.description || "failed"} — grant the bot the 'Delete Messages' admin right`);
         return false;
       } catch (err: any) {
         cleanup.deleteErrors.push(`delete ${mid}: ${err.message}`);
@@ -1276,7 +1305,10 @@ async function handleCronBroadcast(req: any, res: any) {
           list = kept;
         }
       }
-      // Expire every past-validity entry except the just-sent one.
+      // Expire every past-validity entry except the just-sent one. Entries
+      // older than ~47h are dropped as cleaned without calling Telegram
+      // (it forbids deleting them); anything Telegram refuses on a live
+      // message stays tracked with a visible rights error for retry.
       const expired = list.filter(
         (e) =>
           e.messageId !== mem.justSentId &&
@@ -1287,6 +1319,13 @@ async function handleCronBroadcast(req: any, res: any) {
         if (!cleanup.noticeSent && expired.some((e) => !e.noticed)) await postNotice();
         for (const e of expired) {
           if (cleanup.noticeSent) e.noticed = true;
+          // Older than ~47h: Telegram forbids deleting — drop as cleaned
+          // without a doomed call (deterministic under the request clock).
+          if (mem.nowMs - e.sentAtMs > DELETE_TOO_OLD_MS) {
+            const idx = list.indexOf(e);
+            if (idx !== -1) list.splice(idx, 1);
+            continue;
+          }
           if (await deleteId(e.messageId)) {
             const idx = list.indexOf(e);
             if (idx !== -1) list.splice(idx, 1);

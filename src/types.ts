@@ -34,6 +34,9 @@ export interface TradingSignal {
   expiryNoticeSent?: boolean;
   siteName?: string;
   isAlert?: boolean;
+  // Last auto-delete failure for this record (e.g. missing admin rights) —
+  // rendered in History so it is visible instead of silent.
+  deleteError?: string;
 }
 
 export interface TelegramConfig {

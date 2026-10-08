@@ -397,6 +397,8 @@ export default function App() {
           }
 
           // 2. Delete the expired message from the channel.
+          // sentAt lets the server skip >47h-old messages Telegram itself
+          // refuses to delete. Anything else refused stays tracked AND visible.
           const delRes = await fetch("/api/telegram/delete", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -404,13 +406,27 @@ export default function App() {
               botToken: sig.botTokenUsed,
               chatId: sig.chatIdUsed,
               messageId: sig.sentMessageId,
+              sentAt: sig.createdAt,
             }),
           });
           const delData = await delRes.json().catch(() => ({}));
           if (delRes.ok && (delData as any).success !== false) {
             removedIds.push(sig.id);
           } else {
-            console.error(`Auto-delete failed for signal ${sig.id}:`, (delData as any).error || delRes.status);
+            const msg =
+              (delData as any).advice ||
+              (delData as any).error ||
+              `HTTP ${delRes.status} — will retry`;
+            console.error(`Auto-delete failed for signal ${sig.id}:`, msg);
+            // Surface it on the record so the user SEES the rights problem
+            // instead of wondering why old messages linger.
+            setSignals((prev) => {
+              const next = prev.map((s) =>
+                s.id === sig.id ? { ...s, deleteError: String(msg).slice(0, 220) } : s
+              );
+              localStorage.setItem(LOCAL_STORAGE_KEY_SIGNALS, JSON.stringify(next));
+              return next;
+            });
           }
         } catch (err) {
           console.error(`Expiry sweep failed for signal ${sig.id} (will retry):`, err);
@@ -1489,6 +1505,11 @@ export default function App() {
                                     </>
                                   )}
                                 </div>
+                                {sig.deleteError && (
+                                  <div className="pt-1.5 text-[10px] leading-relaxed text-amber-300/90 bg-amber-950/20 border border-amber-900/30 rounded-lg px-2 py-1.5 max-w-[420px]">
+                                    ⚠️ Auto-delete failed — message still in Telegram: {sig.deleteError}
+                                  </div>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-2 shrink-0">

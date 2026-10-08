@@ -42,7 +42,9 @@ If `/api/*` returns HTML instead of JSON, the API route is not deployed
 2. Bot token: from Telegram → `@BotFather` → `/newbot` → paste the token
    exactly (`123456789:ABCdef...`, no spaces).
 3. Channel: Channel Settings → Admins → Add your bot as **Admin** with
-   **Post Messages** permission.
+   **BOTH Post Messages AND Delete Messages** permissions (sending needs the
+   first, auto-delete needs the second — without it, expiry cleanup fails and
+   old messages pile up).
 4. Channel ID:
    - Public: `@yourchannel`
    - Private: forward any channel post to `@username_to_id_bot` → copy the
@@ -54,6 +56,9 @@ Common Telegram errors:
 - `chat not found` → wrong Channel ID, or bot is not an admin yet.
 - `bot was blocked / not a member / needs admin` → re-add bot as admin.
 - `unauthorized` → wrong bot token.
+- Delete refused / old messages never disappear → the bot is missing the
+  **Delete Messages** admin right (Post Messages alone is not enough), or the
+  message is older than ~2 days (Telegram forbids deleting those at all).
 
 ---
 
