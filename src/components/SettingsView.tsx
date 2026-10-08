@@ -28,6 +28,7 @@ interface Props {
     chatTitle: string;
     botToken: string;
     intervalMinutes: number;
+    validityMinutes: number;
     siteName: string;
   }) => void;
 }
@@ -49,6 +50,7 @@ interface CronSetup {
   signalPayload: string;
   cyclePayload?: string;
   intervalMinutes: number;
+  validityMinutes?: number;
   embeddedChatId?: string;
   embeddedChatTitle?: string;
   tokenPrefix?: string;
@@ -175,6 +177,9 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
   const [serverError, setServerError] = useState("");
   const [cronSetup, setCronSetup] = useState<CronSetup | null>(null);
   const [intervalMinutes, setIntervalMinutes] = useState(2);
+  // Signal lifetime in minutes: a sent signal expires (notice + auto-delete)
+  // this long after sending, independent of the send cadence above.
+  const [validityMinutes, setValidityMinutes] = useState(3);
   const [cronTestLoading, setCronTestLoading] = useState(false);
   const [cronTestResult, setCronTestResult] = useState<string | null>(null);
   // Whether the DEPLOYED server demands an Authorization header on cron calls
@@ -227,6 +232,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
           hashtags: siteCfg.hashtags,
           activeContracts: ["UNDER 7", "UNDER 8", "OVER 2", "OVER 3"],
           intervalMinutes,
+          validityMinutes,
         }),
       });
 
@@ -251,6 +257,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
         signalPayload: data.signalPayload,
         cyclePayload: data.cyclePayload || undefined,
         intervalMinutes: data.intervalMinutes,
+        validityMinutes: data.validityMinutes ?? validityMinutes,
         embeddedChatId: data.embeddedChatId,
         embeddedChatTitle: data.embeddedChatTitle,
         tokenPrefix: data.tokenPrefix,
@@ -280,8 +287,9 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
       localStorage.setItem("server_broadcast_signal_payload", data.signalPayload);
       if (data.cyclePayload) localStorage.setItem("server_broadcast_cycle_payload", data.cyclePayload);
       // Persisted for the app's expiry sweep (fallback window) — the payloads
-      // themselves carry the authoritative intervalMinutes per request.
+      // themselves carry the authoritative minutes per request.
       localStorage.setItem("server_broadcast_interval", String(data.intervalMinutes ?? intervalMinutes));
+      localStorage.setItem("server_broadcast_validity", String(data.validityMinutes ?? validityMinutes));
       // Fresh setup → previous cycle's server message (if any) no longer applies.
       localStorage.removeItem("server_broadcast_last_signal_id");
     } catch (err: any) {
@@ -307,6 +315,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
       localStorage.removeItem("server_broadcast_cycle_payload");
       localStorage.removeItem("server_broadcast_cron_payload");
       localStorage.removeItem("server_broadcast_interval");
+      localStorage.removeItem("server_broadcast_validity");
       localStorage.removeItem("server_broadcast_last_signal_id");
       await fetchStatus();
     } catch (err: any) {
@@ -395,6 +404,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
             chatTitle: (data as any).chatTitle || "",
             botToken: insp.botToken,
             intervalMinutes: cronSetup.intervalMinutes,
+            validityMinutes: cronSetup.validityMinutes ?? 3,
             siteName: siteCfg.siteName,
           });
         } catch { /* recording must never fail the test */ }
@@ -413,6 +423,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
     const savedAlert = localStorage.getItem("server_broadcast_alert_payload");
     const savedSignal = localStorage.getItem("server_broadcast_signal_payload");
     const savedCycle = localStorage.getItem("server_broadcast_cycle_payload");
+    const savedValidity = parseFloat(localStorage.getItem("server_broadcast_validity") || "");
     if (savedUrl && savedAlert && savedSignal && localStorage.getItem("server_broadcast_enabled") === "true") {
       setCronSetup({
         cronUrl: savedUrl,
@@ -420,6 +431,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
         signalPayload: savedSignal,
         cyclePayload: savedCycle || undefined,
         intervalMinutes,
+        validityMinutes: isFinite(savedValidity) && savedValidity >= 1 ? Math.min(1440, savedValidity) : 3,
       });
     }
   }, []);
@@ -484,19 +496,33 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
           </button>
         </div>
 
-        {/* Interval selector (only when not yet enabled) */}
+        {/* Interval + validity selectors (only when not yet enabled) */}
         {!isEnabled && (
-          <div className="flex items-center gap-3">
-            <label className="text-[11px] text-slate-400 whitespace-nowrap">Send every</label>
-            <input
-              type="number"
-              min={1}
-              step={0.5}
-              value={intervalMinutes}
-              onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value) || 2))}
-              className="w-20 px-2 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-lg text-slate-100 outline-none"
-            />
-            <span className="text-[11px] text-slate-400">minutes</span>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+            <div className="flex items-center gap-3">
+              <label className="text-[11px] text-slate-400 whitespace-nowrap">Send every</label>
+              <input
+                type="number"
+                min={1}
+                step={0.5}
+                value={intervalMinutes}
+                onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value) || 2))}
+                className="w-20 px-2 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-lg text-slate-100 outline-none"
+              />
+              <span className="text-[11px] text-slate-400">minutes</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-[11px] text-slate-400 whitespace-nowrap" title="How long a sent signal stays valid before it expires (notice + auto-delete)">Delete signals after</label>
+              <input
+                type="number"
+                min={1}
+                step={0.5}
+                value={validityMinutes}
+                onChange={(e) => setValidityMinutes(Math.max(1, Number(e.target.value) || 3))}
+                className="w-20 px-2 py-1.5 text-xs bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-lg text-slate-100 outline-none"
+              />
+              <span className="text-[11px] text-slate-400">minutes</span>
+            </div>
           </div>
         )}
 
@@ -715,7 +741,7 @@ export default function SettingsView({ config, onChange, aiConfigured, onServerS
 
             <p className="text-[10px] text-slate-500">
               <b className="text-slate-300">Tip:</b> One job, every 1 minute — the server sends the alert in the last minute of each {cronSetup.intervalMinutes}-minute block and the signal in the first minute of the next block, always 1 minute apart, always alert first.
-              Each signal states its exact Nairobi (EAT) next-signal time, then expires: the next cycle posts the expiry notice and auto-deletes it (set "Send every" to 15 minutes for the 15-minute wording).
+              Each signal states its exact Nairobi (EAT) next-signal time, stays valid for your delete-after window, then the next cycle posts the expiry notice and auto-deletes it.
               Run <b className="text-rose-300">exactly one</b> scheduler (this job <b className="text-slate-300">or</b> the GitHub workflow — never both, no duplicate jobs): duplicates interleave and destroy the order.
             </p>
 

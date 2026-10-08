@@ -301,15 +301,15 @@ export default function App() {
   }, []);
 
   // ── Signal expiry lifecycle: notice + auto-delete ───────────────────────────
-  // Each sent signal is valid for `validMinutes` (server signals carry the
-  // cron interval; browser scanner signals default to 5 = the scanner's
-  // active window). When the window ends, this sweep — every 30 seconds —
+  // Each sent signal is valid for `validMinutes` (server/test deliveries carry
+  // their validity window; browser scanner signals default to 3 minutes).
+  // When the window ends, this sweep — every 30 seconds —
   // 1. posts the EXPIRED notice to the channel (signals only, not alerts),
   // 2. deletes the expired message from the Telegram channel,
   // 3. removes the record from the app (state + localStorage).
   // A signal is only removed after Telegram confirms deletion (or reports it
   // already gone); network failures are retried on the next sweep.
-  const DEFAULT_SIGNAL_VALIDITY_MIN = 5;
+  const DEFAULT_SIGNAL_VALIDITY_MIN = 3;
 
   function readSiteName(): string {
     try {
@@ -321,11 +321,21 @@ export default function App() {
   }
 
   function readServerIntervalFallback(): number {
+    // Send-cadence fallback for the "next signal in X" wording: explicit
+    // interval setting first, then the standard 15-minute example default.
     try {
-      const v = parseFloat(localStorage.getItem("server_broadcast_interval") || "");
-      if (isFinite(v) && v >= 1) return Math.min(1440, v);
+      const iv = parseFloat(localStorage.getItem("server_broadcast_interval") || "");
+      if (isFinite(iv) && iv >= 1) return Math.min(1440, iv);
     } catch { /* ignore */ }
     return 15;
+  }
+
+  function readValidityFallback(): number {
+    try {
+      const v = parseFloat(localStorage.getItem("server_broadcast_validity") || "");
+      if (isFinite(v) && v >= 1) return Math.min(1440, v);
+    } catch { /* ignore */ }
+    return DEFAULT_SIGNAL_VALIDITY_MIN;
   }
 
   function buildLocalExpiryNotice(site: string, mins: number): string {
@@ -356,7 +366,7 @@ export default function App() {
         if (!sig.sentMessageId || !sig.botTokenUsed || !sig.chatIdUsed) return false;
         const sentAt = new Date(sig.createdAt).getTime();
         if (isNaN(sentAt)) return false;
-        const validityMs = (sig.validMinutes ?? DEFAULT_SIGNAL_VALIDITY_MIN) * 60000;
+        const validityMs = (sig.validMinutes ?? readValidityFallback()) * 60000;
         return now - sentAt >= validityMs;
       });
 
@@ -377,7 +387,7 @@ export default function App() {
                   chatId: sig.chatIdUsed,
                   text: buildLocalExpiryNotice(
                     sig.siteName || readSiteName(),
-                    sig.validMinutes ?? readServerIntervalFallback()
+                    readServerIntervalFallback()
                   ),
                 }),
               });
@@ -728,6 +738,7 @@ export default function App() {
     chatTitle: string;
     botToken: string;
     intervalMinutes: number;
+    validityMinutes: number;
     siteName: string;
   }) => {
     const isAlert = entry.type === "alert";
@@ -753,7 +764,7 @@ export default function App() {
       chatTitle: entry.chatTitle || config.chatTitle || "Telegram Channel",
       createdAt: new Date().toISOString(),
       updateHistory: [],
-      validMinutes: entry.intervalMinutes,
+      validMinutes: entry.validityMinutes,
       siteName: entry.siteName,
       isAlert,
     };
